@@ -4,10 +4,18 @@ import { KMEANS_DATA } from "../../mock/model";
 const CLUSTER_COLORS = ["#4F7DBD", "#163A70", "#E67E22", "#16A34A"];
 const CLUSTER_LABELS = ["经济型", "中端", "中高端", "豪华型"];
 
-export function KMeansScatter() {
-  const clusters = [0, 1, 2, 3].map(c => ({
-    name: CLUSTER_LABELS[c],
-    data: KMEANS_DATA.filter(d => d.cluster === c),
+interface KMeansPoint {
+  x: number;
+  y: number;
+  cluster: number;
+  label?: string;
+}
+
+export function KMeansScatter({ data = KMEANS_DATA }: { data?: KMeansPoint[] }) {
+  const clusterIds = Array.from(new Set(data.map(item => item.cluster))).sort((a, b) => a - b);
+  const clusters = clusterIds.map(c => ({
+    name: data.find(item => item.cluster === c)?.label ?? CLUSTER_LABELS[c] ?? `分层${c + 1}`,
+    data: data.filter(d => d.cluster === c),
     color: CLUSTER_COLORS[c],
   }));
 
@@ -20,7 +28,7 @@ export function KMeansScatter() {
         <Tooltip formatter={(v: number, name: string) => name === "单价" ? [`${v.toFixed(0)}元/㎡`, name] : [`${v.toFixed(0)}㎡`, name]} contentStyle={{ fontSize: 12 }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         {clusters.map(({ name, data, color }, i) => (
-          <Scatter key={`cluster-${i}`} name={name} data={data} fill={color} opacity={0.75} r={4} />
+          <Scatter key={`cluster-${i}`} name={name} data={data} fill={color ?? CLUSTER_COLORS[i % CLUSTER_COLORS.length]} opacity={0.75} r={4} />
         ))}
       </ScatterChart>
     </ResponsiveContainer>

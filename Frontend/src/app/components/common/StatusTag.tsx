@@ -10,6 +10,7 @@ const STATUS_MAP: Record<string, { bg: string; text: string; dot: string; label:
   pending: { bg: "#F3F4F6", text: "#6B7280", dot: "#9CA3AF", label: "待运行" },
   paused: { bg: "#FFFBEB", text: "#F59E0B", dot: "#F59E0B", label: "已暂停" },
   failed: { bg: "#FEF2F2", text: "#DC2626", dot: "#DC2626", label: "失败" },
+  partial_failed: { bg: "#FFFBEB", text: "#F59E0B", dot: "#F59E0B", label: "部分失败" },
   active: { bg: "#F0FDF4", text: "#16A34A", dot: "#16A34A", label: "在售" },
   sold: { bg: "#F3F4F6", text: "#6B7280", dot: "#9CA3AF", label: "已售" },
 };

@@ -1,7 +1,12 @@
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { PRED_VS_ACTUAL } from "../../mock/model";
 
-export function PredVsActualScatter() {
+interface PredictionPoint {
+  actual: number;
+  predicted: number;
+}
+
+export function PredVsActualScatter({ data = PRED_VS_ACTUAL }: { data?: PredictionPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={260}>
       <ScatterChart margin={{ left: 5, right: 10, top: 10, bottom: 5 }}>
@@ -10,7 +15,7 @@ export function PredVsActualScatter() {
         <YAxis dataKey="predicted" name="预测" tickFormatter={v => `${(v/1000).toFixed(0)}k`} tick={{ fontSize: 11, fill: "#9CA3AF" }} width={38} label={{ value: "预测", angle: -90, position: "insideLeft", fontSize: 12, fill: "#9CA3AF" }} />
         <Tooltip formatter={(v: number) => [`${v.toLocaleString()}元/㎡`]} contentStyle={{ fontSize: 12 }} />
         <ReferenceLine segment={[{ x: 5000, y: 5000 }, { x: 30000, y: 30000 }]} stroke="#E67E22" strokeDasharray="4 2" strokeWidth={1.5} />
-        <Scatter data={PRED_VS_ACTUAL} fill="#163A70" opacity={0.6} r={3} />
+        <Scatter data={data} fill="#163A70" opacity={0.6} r={3} />
       </ScatterChart>
     </ResponsiveContainer>
   );

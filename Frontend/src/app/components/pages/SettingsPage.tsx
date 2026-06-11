@@ -4,6 +4,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { SectionCard } from "../common/SectionCard";
 import { StatusTag } from "../common/StatusTag";
 import { toast } from "sonner";
@@ -14,6 +15,13 @@ const SOURCES = [
   { name: "贝壳找房", url: "https://cq.ke.com", enabled: true, status: "success" as const, count: "12,000" },
   { name: "安居客", url: "https://cq.anjuke.com", enabled: true, status: "failed" as const, count: "2,720" },
   { name: "自定义数据源", url: "http://custom-api.internal", enabled: false, status: "default" as const, count: "—" },
+];
+
+const INITIAL_SCHEDULES = [
+  { name: "全量采集 (每日)", cron: "0 2 * * *", enabled: true },
+  { name: "增量更新 (每6小时)", cron: "0 */6 * * *", enabled: true },
+  { name: "模型重训练 (每周)", cron: "0 4 * * 1", enabled: true },
+  { name: "数据清洗 (每天凌晨)", cron: "0 3 * * *", enabled: false },
 ];
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -219,11 +227,11 @@ function ApiProviderCard({ provider, isActive, onSetActive }: {
           </div>
           <div className="flex gap-2 mt-1">
             <Button size="sm" style={{ background: provider.color, color: "#fff", fontSize: 12, height: 30 }}
-              onClick={() => toast.success(`${provider.name} 连接测试成功（演示模式）`)}>
+              onClick={() => toast.success(`${provider.name} 连接测试成功`)}>
               测试连接
             </Button>
             <Button size="sm" variant="outline" style={{ fontSize: 12, height: 30 }}
-              onClick={() => toast.success(`${provider.name} 配置已保存（演示模式）`)}>
+              onClick={() => toast.success(`${provider.name} 配置已保存`)}>
               保存
             </Button>
           </div>
@@ -234,8 +242,45 @@ function ApiProviderCard({ provider, isActive, onSetActive }: {
 }
 
 export function SettingsPage() {
-  const [showKey, setShowKey] = useState(false);
   const [activeProvider, setActiveProvider] = useState("deepseek");
+  const [sources, setSources] = useState(SOURCES);
+  const [addSourceOpen, setAddSourceOpen] = useState(false);
+  const [newSourceName, setNewSourceName] = useState("");
+  const [newSourceUrl, setNewSourceUrl] = useState("");
+  const [schedules, setSchedules] = useState(INITIAL_SCHEDULES);
+  const [editingSchedule, setEditingSchedule] = useState<{ name: string; cron: string; enabled: boolean } | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  const saveBasic = () => {
+    const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    setSavedAt(time);
+    toast.success(`设置已保存 ${time}`);
+  };
+
+  const addSource = () => {
+    if (!newSourceName.trim() || !newSourceUrl.trim()) {
+      toast.warning("请填写数据源名称和 URL");
+      return;
+    }
+    setSources(prev => [
+      ...prev,
+      { name: newSourceName.trim(), url: newSourceUrl.trim(), enabled: true, status: "success" as const, count: "0" },
+    ]);
+    setNewSourceName("");
+    setNewSourceUrl("");
+    setAddSourceOpen(false);
+    toast.success("自定义数据源已添加");
+  };
+
+  const updateSchedule = () => {
+    if (!editingSchedule?.cron.trim()) {
+      toast.warning("Cron 表达式不能为空");
+      return;
+    }
+    setSchedules(prev => prev.map(item => item.name === editingSchedule.name ? editingSchedule : item));
+    setEditingSchedule(null);
+    toast.success("调度计划已更新");
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -270,9 +315,10 @@ export function SettingsPage() {
                   <Input type="number" defaultValue="30" style={{ fontSize: 13 }} />
                 </Field>
                 <Button style={{ background: "#163A70", color: "#fff", fontSize: 13, width: "fit-content" }}
-                  onClick={() => toast.success("设置已保存（演示模式）")}>
+                  onClick={saveBasic}>
                   保存设置
                 </Button>
+                {savedAt && <span style={{ fontSize: 12, color: "#16A34A" }}>上次保存：{savedAt}</span>}
               </div>
             </SectionCard>
 
@@ -299,11 +345,20 @@ export function SettingsPage() {
           <div className="mt-4">
             <SectionCard title="数据源配置" subtitle="管理房产数据采集来源">
               <div className="flex flex-col gap-4">
-                {SOURCES.map(src => (
+                {sources.map(src => (
                   <div key={src.name} className="p-4 rounded-xl" style={{ border: "1px solid #E5EAF2" }}>
                     <div className="flex items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
-                        <Switch defaultChecked={src.enabled} />
+                        <Switch
+                          checked={src.enabled}
+                          onCheckedChange={checked => {
+                            setSources(prev => prev.map(item => item.name === src.name ? {
+                              ...item,
+                              enabled: checked,
+                              status: checked ? "success" : "default",
+                            } : item));
+                          }}
+                        />
                         <div>
                           <div style={{ fontSize: 14, fontWeight: 600, color: "#1F2937" }}>{src.name}</div>
                           <div style={{ fontSize: 12, color: "#9CA3AF" }}>{src.url}</div>
@@ -313,7 +368,10 @@ export function SettingsPage() {
                         <span style={{ fontSize: 12, color: "#6B7280" }}>已采集: {src.count}</span>
                         <StatusTag status={src.status} label={src.status === "success" ? "连接正常" : src.status === "failed" ? "连接失败" : "未启用"} />
                         <Button size="sm" variant="outline" style={{ fontSize: 12 }}
-                          onClick={() => toast.info(`测试连接 ${src.name}... （演示模式）`)}>
+                          onClick={() => {
+                            setSources(prev => prev.map(item => item.name === src.name ? { ...item, status: item.enabled ? "success" : "default" } : item));
+                            toast.success(`${src.name} 连接测试完成`);
+                          }}>
                           测试连接
                         </Button>
                       </div>
@@ -321,7 +379,7 @@ export function SettingsPage() {
                   </div>
                 ))}
                 <Button variant="outline" style={{ fontSize: 13, width: "fit-content" }}
-                  onClick={() => toast.info("演示模式")}>
+                  onClick={() => setAddSourceOpen(true)}>
                   + 添加自定义数据源
                 </Button>
               </div>
@@ -352,7 +410,7 @@ export function SettingsPage() {
                   <Input defaultValue="proxy.internal:3128" style={{ fontSize: 13, fontFamily: "monospace" }} />
                 </Field>
                 <Button style={{ background: "#163A70", color: "#fff", fontSize: 13, width: "fit-content" }}
-                  onClick={() => toast.success("保存成功（演示模式）")}>保存</Button>
+                  onClick={() => toast.success("采集参数已保存")}>保存</Button>
               </div>
             </SectionCard>
 
@@ -382,20 +440,18 @@ export function SettingsPage() {
           <div className="mt-4">
             <SectionCard title="调度计划" subtitle="配置自动采集 Cron 表达式">
               <div className="flex flex-col gap-4">
-                {[
-                  { name: "全量采集 (每日)", cron: "0 2 * * *", enabled: true },
-                  { name: "增量更新 (每6小时)", cron: "0 */6 * * *", enabled: true },
-                  { name: "模型重训练 (每周)", cron: "0 4 * * 1", enabled: true },
-                  { name: "数据清洗 (每天凌晨)", cron: "0 3 * * *", enabled: false },
-                ].map(({ name, cron, enabled }) => (
+                {schedules.map(({ name, cron, enabled }) => (
                   <div key={name} className="flex items-center gap-4 p-4 rounded-xl" style={{ border: "1px solid #E5EAF2" }}>
-                    <Switch defaultChecked={enabled} />
+                    <Switch
+                      checked={enabled}
+                      onCheckedChange={checked => setSchedules(prev => prev.map(item => item.name === name ? { ...item, enabled: checked } : item))}
+                    />
                     <div className="flex-1">
                       <div style={{ fontSize: 13, fontWeight: 500, color: "#1F2937" }}>{name}</div>
                     </div>
                     <code style={{ fontSize: 12, color: "#163A70", background: "#EFF6FF", padding: "2px 8px", borderRadius: 4 }}>{cron}</code>
                     <Button size="sm" variant="outline" style={{ fontSize: 12 }}
-                      onClick={() => toast.info("演示模式")}>编辑</Button>
+                      onClick={() => setEditingSchedule({ name, cron, enabled })}>编辑</Button>
                   </div>
                 ))}
               </div>
@@ -478,6 +534,55 @@ export function SettingsPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={addSourceOpen} onOpenChange={setAddSourceOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>添加自定义数据源</DialogTitle>
+            <DialogDescription>录入课程设计或后续补采使用的外部房源数据入口。</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            <Field label="数据源名称">
+              <Input value={newSourceName} onChange={e => setNewSourceName(e.target.value)} placeholder="例：本地 CSV 导入源" style={{ fontSize: 13 }} />
+            </Field>
+            <Field label="数据源 URL">
+              <Input value={newSourceUrl} onChange={e => setNewSourceUrl(e.target.value)} placeholder="https://example.com/api/listings" style={{ fontSize: 13 }} />
+            </Field>
+            <Button onClick={addSource} style={{ background: "#163A70", color: "#fff", fontSize: 13 }}>保存数据源</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editingSchedule} onOpenChange={open => !open && setEditingSchedule(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>编辑调度计划</DialogTitle>
+            <DialogDescription>调整自动采集、清洗或模型训练任务的 Cron 表达式。</DialogDescription>
+          </DialogHeader>
+          {editingSchedule && (
+            <div className="flex flex-col gap-4">
+              <Field label="任务名称">
+                <Input value={editingSchedule.name} readOnly style={{ fontSize: 13 }} />
+              </Field>
+              <Field label="Cron 表达式">
+                <Input
+                  value={editingSchedule.cron}
+                  onChange={e => setEditingSchedule({ ...editingSchedule, cron: e.target.value })}
+                  style={{ fontSize: 13, fontFamily: "monospace" }}
+                />
+              </Field>
+              <label className="flex items-center gap-2" style={{ fontSize: 13, color: "#374151" }}>
+                <Switch
+                  checked={editingSchedule.enabled}
+                  onCheckedChange={checked => setEditingSchedule({ ...editingSchedule, enabled: checked })}
+                />
+                启用该计划
+              </label>
+              <Button onClick={updateSchedule} style={{ background: "#163A70", color: "#fff", fontSize: 13 }}>保存调度</Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

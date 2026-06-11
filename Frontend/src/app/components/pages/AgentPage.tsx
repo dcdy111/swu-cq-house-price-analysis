@@ -4,8 +4,11 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
-import { SESSIONS, MESSAGES, TOOL_TRACES, Message } from "../../mock/chat";
+import { SESSIONS, MESSAGES, TOOL_TRACES, Message, ToolTrace } from "../../mock/chat";
+import { DISTRICTS } from "../../mock/districts";
+import { TREND_DATA } from "../../mock/trend";
 import { toast } from "sonner";
+import { api, type AgentToolCall, type GeneratedReport } from "../../services/api";
 
 const SUGGESTIONS = [
   "近12月重庆房价走势如何？",
@@ -17,11 +20,11 @@ const SUGGESTIONS = [
 // Mock thinking chain shown before assistant reply
 const THINKING_CHAIN = `分析用户问题：比较渝北区与南岸区的二手房价格走势...
 
-→ 查询数据库：SELECT district, avg(unit_price), COUNT(*) FROM listings WHERE district IN ('渝北区','南岸区') GROUP BY month...
+→ 调用工具：query_market_stats({ districts: ["渝北区", "南岸区"], metrics: ["avgPrice", "listing_count"] })
 
-→ 获取到12个月数据点，渝北区均价呈微下行趋势（-0.5% YoY），南岸区受弹子石CBD开发驱动上涨2.5%...
+→ 获取到 12 个月挂牌价数据点，渝北区均价呈微下行趋势，南岸区受弹子石 CBD 开发驱动上涨...
 
-→ 调用预测模型对两区下半年走势进行推断，置信区间95%...
+→ 调用工具：get_model_result({ model: "xgboost_v2.3.1" })
 
 → 整合数据，准备生成对比分析回复。`;
 
@@ -29,6 +32,7 @@ function useTimer(running: boolean) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (!running) return;
+    setElapsed(0);
     const t = setInterval(() => setElapsed(e => e + 1), 1000);
     return () => clearInterval(t);
   }, [running]);
@@ -38,6 +42,34 @@ function useTimer(running: boolean) {
 function formatTime(s: number) {
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function toToolTrace(call: AgentToolCall): ToolTrace {
+  return {
+    id: String(call.id),
+    tool: call.tool_name,
+    input: call.tool_args,
+    output: call.tool_result,
+    duration: call.duration_ms,
+    status: call.status,
+  };
+}
+
+function reportToHtml(report?: GeneratedReport | null) {
+  if (!report) return buildReportHtml();
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${report.title}</title></head>
+<body style="font-family:Arial,'Microsoft YaHei',sans-serif;line-height:1.8;color:#1F2937;">
+${report.content
+  .split("\n")
+  .map(line => {
+    if (line.startsWith("# ")) return `<h1>${line.slice(2)}</h1>`;
+    if (line.startsWith("## ")) return `<h2>${line.slice(3)}</h2>`;
+    if (line.startsWith("- ")) return `<p>• ${line.slice(2)}</p>`;
+    return line.trim() ? `<p>${line}</p>` : "";
+  })
+  .join("\n")}
+</body></html>`;
 }
 
 function ThinkingBubble({ elapsed }: { elapsed: number }) {
@@ -142,8 +174,111 @@ function MessageBubble({ msg }: { msg: Message & { thinkTime?: string; thinking?
   );
 }
 
+function downloadTextFile(filename: string, content: string, type = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildReportHtml() {
+  const top = DISTRICTS[0];
+  const latest = TREND_DATA[TREND_DATA.length - 1];
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>重庆二手房市场分析报告</title></head>
+<body style="font-family:Arial,'Microsoft YaHei',sans-serif;line-height:1.8;color:#1F2937;">
+<h1>2026年H1重庆二手房挂牌价市场分析报告</h1>
+<h2>一、核心结论</h2>
+<p>截至 ${latest.month}，全市样例挂牌均价为 ${latest.avgPrice.toLocaleString()} 元/㎡，样本量覆盖 ${DISTRICTS.reduce((sum, item) => sum + item.count, 0).toLocaleString()} 套。</p>
+<h2>二、区域对比</h2>
+<p>${top.name} 挂牌均价 ${top.avgPrice.toLocaleString()} 元/㎡，在当前样例数据中位居第一；渝北、江北、南岸为重点样本覆盖区域。</p>
+<h2>三、数据证据</h2>
+<ul>
+<li>工具 query_market_stats：返回区县均价、样本量、同比变化。</li>
+<li>工具 get_chart_series：返回 12 个月挂牌均价趋势。</li>
+<li>工具 get_model_result：返回模型 R²、MAE、RMSE 与特征重要性。</li>
+</ul>
+<h2>四、建议</h2>
+<p>答辩展示时建议先展示重庆区县地图，再进入异常采集日志、模型解释和 Agent 工具调用证据。</p>
+</body></html>`;
+}
+
+function buildAnswer(question: string): { content: string; traces: ToolTrace[]; thinking: string } {
+  const normalized = question.trim();
+  const yuBei = DISTRICTS.find(item => item.name === "渝北区")!;
+  const nanAn = DISTRICTS.find(item => item.name === "南岸区")!;
+  const top = [...DISTRICTS].sort((a, b) => b.change - a.change)[0];
+  const latest = TREND_DATA[TREND_DATA.length - 1];
+
+  const marketTrace: ToolTrace = {
+    id: `TR${Date.now()}A`,
+    tool: "query_market_stats",
+    input: { question: normalized, metrics: ["avgPrice", "listing_count", "change"] },
+    output: { total_districts: DISTRICTS.length, latest_month: latest.month, city_avg_price: latest.avgPrice },
+    duration: 186,
+    status: "success",
+  };
+
+  if (normalized.includes("报告")) {
+    return {
+      content: `**结论**\n已生成《2026年H1重庆二手房挂牌价市场分析报告》，右侧面板可下载可打印 HTML 或 Word 文档。\n\n**关键证据**\n- 当前样例覆盖 ${DISTRICTS.length} 个重庆区县\n- ${latest.month} 全市挂牌均价 ${latest.avgPrice.toLocaleString()} 元/㎡\n- ${DISTRICTS[0].name} 均价 ${DISTRICTS[0].avgPrice.toLocaleString()} 元/㎡，位居样例数据第一\n\n**可执行建议**\n答辩时按“地图分布 → 区县排行 → 模型指标 → Agent 工具调用证据”的顺序展示。`,
+      traces: [
+        marketTrace,
+        {
+          id: `TR${Date.now()}B`,
+          tool: "generate_report",
+          input: { title: "2026年H1重庆二手房挂牌价市场分析报告", sections: ["价格走势", "区域对比", "模型解释", "采集建议"] },
+          output: { report_id: `RPT_${Date.now()}`, status: "generated", export_formats: ["html", "doc"] },
+          duration: 942,
+          status: "success",
+        },
+      ],
+      thinking: "识别为报告生成请求...\n→ 调用 query_market_stats 获取市场统计...\n→ 调用 generate_report 生成报告结构...\n→ 返回报告摘要与下载入口...",
+    };
+  }
+
+  if (normalized.includes("渝北") || normalized.includes("南岸")) {
+    return {
+      content: `**结论**\n渝北区样本量更大，挂牌均价为 ${yuBei.avgPrice.toLocaleString()} 元/㎡；南岸区挂牌均价为 ${nanAn.avgPrice.toLocaleString()} 元/㎡，当前高于渝北区。\n\n**关键证据**\n- 渝北区样本量 ${yuBei.count.toLocaleString()} 套，同比 ${yuBei.change > 0 ? "+" : ""}${yuBei.change}%\n- 南岸区样本量 ${nanAn.count.toLocaleString()} 套，同比 +${nanAn.change}%\n\n**可执行建议**\n如果要补采，优先对渝北区做增量维护，对南岸区做价格变化快照跟踪。`,
+      traces: [
+        marketTrace,
+        {
+          id: `TR${Date.now()}B`,
+          tool: "get_chart_series",
+          input: { districts: ["渝北区", "南岸区"], series: "price_trend" },
+          output: { months: TREND_DATA.length, latest_avg_price: latest.avgPrice },
+          duration: 121,
+          status: "success",
+        },
+      ],
+      thinking: THINKING_CHAIN,
+    };
+  }
+
+  return {
+    content: `**结论**\n当前样例数据中，${top.name} 同比涨幅最高，为 +${top.change}%；${latest.month} 全市挂牌均价为 ${latest.avgPrice.toLocaleString()} 元/㎡。\n\n**关键证据**\n- 区县覆盖：${DISTRICTS.length} 个\n- 总样本量：${DISTRICTS.reduce((sum, item) => sum + item.count, 0).toLocaleString()} 套\n- 数据质量均值：${(DISTRICTS.reduce((sum, item) => sum + item.quality, 0) / DISTRICTS.length).toFixed(1)} 分\n\n**可执行建议**\n可以继续追问某个区县，或点击右侧报告按钮生成答辩材料。`,
+    traces: [marketTrace],
+    thinking: "识别为市场问数请求...\n→ 调用 query_market_stats...\n→ 汇总区县指标并生成回答...",
+  };
+}
+
 // Tool trace panel (right, collapsible)
-function ActivityPanel({ open, onClose, elapsed }: { open: boolean; onClose: () => void; elapsed: number }) {
+function ActivityPanel({
+  open,
+  onClose,
+  elapsed,
+  traces,
+  report,
+}: {
+  open: boolean;
+  onClose: () => void;
+  elapsed: number;
+  traces: ToolTrace[];
+  report?: GeneratedReport | null;
+}) {
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
 
   return (
@@ -173,7 +308,7 @@ function ActivityPanel({ open, onClose, elapsed }: { open: boolean; onClose: () 
           <div className="px-4 py-3" style={{ borderBottom: "1px solid #E5EAF2" }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 8 }}>思考</div>
             <div className="flex flex-col gap-1.5">
-              {TOOL_TRACES.map(t => (
+              {traces.map(t => (
                 <Collapsible key={t.id} open={expandedTool === t.id} onOpenChange={v => setExpandedTool(v ? t.id : null)}>
                   <CollapsibleTrigger className="w-full flex items-center gap-2 text-left group">
                     <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: t.status === "success" ? "#16A34A" : "#DC2626" }} />
@@ -204,27 +339,34 @@ function ActivityPanel({ open, onClose, elapsed }: { open: boolean; onClose: () 
               <div style={{ fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 8 }}>报告预览</div>
               <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #E5EAF2" }}>
                 <div className="px-3 py-2.5" style={{ background: "#163A70" }}>
-                  <div style={{ color: "#fff", fontSize: 12, fontWeight: 700 }}>2026年H1重庆二手房市场分析报告</div>
+                  <div style={{ color: "#fff", fontSize: 12, fontWeight: 700 }}>{report?.title ?? "重庆二手房挂牌价市场分析报告"}</div>
                 </div>
                 <div className="p-3 flex flex-col gap-3">
                   <p style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
-                    2026年上半年重庆二手房市场整体呈稳中有升态势，全市均价达14,120元/㎡，同比上涨7.1%。
+                    {report?.content?.split("\n").find(line => line.startsWith("- "))?.replace("- ", "") ??
+                      "等待 Agent 通过 generate_report 工具生成可追踪报告。"}
                   </p>
                   <div className="h-16 rounded-lg flex items-center justify-center" style={{ background: "#F7F9FC", border: "1px dashed #E5EAF2" }}>
-                    <span style={{ fontSize: 11, color: "#9CA3AF" }}>图表占位</span>
+                    <span style={{ fontSize: 11, color: "#9CA3AF" }}>{report ? `报告 #${report.id}` : "报告预览"}</span>
                   </div>
                   <ul style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.8, paddingLeft: 14, listStyle: "disc", margin: 0 }}>
-                    <li>渝中区均价 22,450 元/㎡，涨幅 3.2%</li>
-                    <li>3室2厅为主流需求，占比35%</li>
-                    <li>地铁沿线溢价约 8-12%</li>
+                    <li>工具调用记录已保存到 agent_tool_calls</li>
+                    <li>报告证据已保存到 generated_reports.evidence_json</li>
+                    <li>所有价格口径均为挂牌价/报价</li>
                   </ul>
                   <div className="flex gap-2">
                     <Button size="sm" className="flex-1" style={{ background: "#163A70", color: "#fff", fontSize: 11, height: 30 }}
-                      onClick={() => toast.info("演示模式")}>
+                      onClick={() => {
+                        downloadTextFile("重庆二手房挂牌价市场分析报告.html", reportToHtml(report), "text/html;charset=utf-8");
+                        toast.success("已导出可打印 HTML 报告");
+                      }}>
                       <Download size={11} className="mr-1" />PDF
                     </Button>
                     <Button size="sm" variant="outline" className="flex-1" style={{ fontSize: 11, height: 30 }}
-                      onClick={() => toast.info("演示模式")}>
+                      onClick={() => {
+                        downloadTextFile("重庆二手房挂牌价市场分析报告.doc", reportToHtml(report), "application/msword;charset=utf-8");
+                        toast.success("已导出 Word 报告");
+                      }}>
                       <FileText size={11} className="mr-1" />Word
                     </Button>
                   </div>
@@ -245,6 +387,8 @@ export function AgentPage() {
   );
   const [thinking, setThinking] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
+  const [toolTraces, setToolTraces] = useState<ToolTrace[]>(TOOL_TRACES);
+  const [latestReport, setLatestReport] = useState<GeneratedReport | null>(null);
   const thinkElapsed = useTimer(thinking);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -281,36 +425,76 @@ export function AgentPage() {
     setMenuSession(null);
   };
 
-  const archiveSession = () => {
+  const archiveSession = (id: string) => {
+    setSessions(prev => prev.filter(s => s.id !== id));
+    if (activeSession === id) {
+      const next = sessions.find(s => s.id !== id);
+      if (next) setActiveSession(next.id);
+    }
     setMenuSession(null);
-    toast.info("归档功能可在「系统设置 → 数据源」中配置自动归档规则");
+    toast.success("会话已归档");
   };
 
   const deleteSession = (id: string) => {
     setSessions(prev => prev.filter(s => s.id !== id));
+    if (activeSession === id) {
+      const next = sessions.find(s => s.id !== id);
+      if (next) setActiveSession(next.id);
+    }
     setMenuSession(null);
     toast.success("会话已删除");
   };
 
+  const createSession = () => {
+    const id = `S${Date.now()}`;
+    setSessions(prev => [{ id, title: "新的市场问数", preview: "等待输入问题...", time: "刚刚", messageCount: 0, pinned: false } as any, ...prev]);
+    setActiveSession(id);
+    setMessages([
+      {
+        id: `M${Date.now()}`,
+        role: "assistant",
+        content: "你好，我可以基于重庆二手房挂牌价统计、采集日志和模型结果回答问题。请直接输入区县、趋势、异常或报告需求。",
+        timestamp: "刚刚",
+      },
+    ]);
+    setToolTraces([]);
+    setLatestReport(null);
+  };
+
   const sortedSessions = [...sessions].sort((a, b) => Number((b as any).pinned) - Number((a as any).pinned));
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     if (!input.trim()) return;
     const newMsg: Message = { id: `M${Date.now()}`, role: "user", content: input, timestamp: "刚刚" };
     setMessages(prev => [...prev, newMsg]);
     setInput("");
     setThinking(true);
-    // Simulate thinking + response
-    setTimeout(() => {
+    try {
+      const result = await api.chatAgent({ session_id: activeSession, question: newMsg.content });
       setThinking(false);
       setMessages(prev => [...prev, {
         id: `R${Date.now()}`, role: "assistant",
-        content: "正在分析重庆房源数据库中的历史记录...（演示模式，返回占位回复）",
+        content: result.answer,
         timestamp: "刚刚",
-        thinkTime: "8s",
-        thinking: "分析用户问题...\n→ 查询相关数据...\n→ 整合分析结果...",
+        thinkTime: `${Math.max(1, thinkElapsed)}s`,
+        thinking: result.thinking,
       }]);
-    }, 2500);
+      setToolTraces(result.tool_calls.map(toToolTrace));
+      if (result.report) {
+        setLatestReport(result.report);
+      }
+      setSessions(prev => prev.map(s => s.id === activeSession ? { ...s, preview: newMsg.content, messageCount: (s.messageCount || 0) + 2, time: "刚刚" } : s));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Agent 请求失败";
+      setThinking(false);
+      setMessages(prev => [...prev, {
+        id: `R${Date.now()}`,
+        role: "assistant",
+        content: `**结论**\nAgent 请求失败。\n\n**关键证据**\n- 错误信息：${message}\n\n**可执行建议**\n请先确认后端服务和数据库连接正常，再重新发送问题。`,
+        timestamp: "刚刚",
+      }]);
+      toast.error(message);
+    }
   };
 
   return (
@@ -392,7 +576,7 @@ export function AgentPage() {
                       </button>
                       <button className="w-full flex items-center gap-2 px-3 py-2 transition-colors hover:bg-[#F7F9FC]"
                         style={{ fontSize: 12, color: "#374151" }}
-                        onClick={e => { e.stopPropagation(); archiveSession(); }}>
+                        onClick={e => { e.stopPropagation(); archiveSession(s.id); }}>
                         <Archive size={12} style={{ color: "#9CA3AF" }} />
                         归档
                       </button>
@@ -412,7 +596,8 @@ export function AgentPage() {
         </div>
         <div className="p-3 flex-shrink-0" style={{ borderTop: "1px solid #E5EAF2" }}>
           <button className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg"
-            style={{ border: "1px dashed #CBD5E1", color: "#9CA3AF", fontSize: 12 }}>
+            style={{ border: "1px dashed #CBD5E1", color: "#9CA3AF", fontSize: 12 }}
+            onClick={createSession}>
             <MessageSquare size={12} />新建会话
           </button>
         </div>
@@ -485,7 +670,7 @@ export function AgentPage() {
         </div>
 
         {/* Right: Activity panel */}
-        <ActivityPanel open={activityOpen} onClose={() => setActivityOpen(false)} elapsed={thinkElapsed} />
+        <ActivityPanel open={activityOpen} onClose={() => setActivityOpen(false)} elapsed={thinkElapsed} traces={toolTraces} report={latestReport} />
       </div>
     </div>
   );

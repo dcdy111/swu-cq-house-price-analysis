@@ -1,19 +1,28 @@
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ZAxis } from "recharts";
+import { AreaPricePoint } from "../../services/api";
 import { SCATTER_DATA } from "../../mock/trend";
 
-const DISTRICT_COLORS: Record<string, string> = {
-  "渝中区": "#E67E22",
-  "江北区": "#163A70",
-  "南岸区": "#1F4E8C",
-  "渝北区": "#4F7DBD",
-  "九龙坡区": "#F59E0B",
-};
+const COLORS = ["#E67E22", "#163A70", "#1F4E8C", "#4F7DBD", "#F59E0B", "#16A34A", "#7C3AED", "#9CA3AF"];
 
-export function AreaPriceScatter() {
-  const byDistrict = ["渝中区", "江北区", "南岸区", "渝北区", "九龙坡区"].map(d => ({
-    name: d,
-    data: SCATTER_DATA.filter(p => p.district === d).slice(0, 20),
-    color: DISTRICT_COLORS[d],
+interface AreaPriceScatterProps {
+  data?: AreaPricePoint[];
+}
+
+export function AreaPriceScatter({ data: apiData }: AreaPriceScatterProps) {
+  const points = apiData && apiData.length > 0
+    ? apiData.map(item => ({
+      size: item.area,
+      price: item.unit_price,
+      district: item.district,
+      title: item.title,
+      totalPrice: item.total_price,
+    }))
+    : SCATTER_DATA;
+  const districts = Array.from(new Set(points.map(item => item.district))).slice(0, 8);
+  const byDistrict = districts.map((district, index) => ({
+    name: district,
+    data: points.filter(p => p.district === district).slice(0, 80),
+    color: COLORS[index % COLORS.length],
   }));
 
   return (

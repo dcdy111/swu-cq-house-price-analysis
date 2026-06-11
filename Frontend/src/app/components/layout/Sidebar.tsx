@@ -2,13 +2,14 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
   LayoutDashboard, Database, Radio, BarChart2, MessageSquare,
-  Settings, ChevronLeft, ChevronRight, Home
+  Settings, ChevronLeft, ChevronRight, ShieldCheck
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { path: "/dashboard", label: "首页总览", icon: LayoutDashboard },
   { path: "/listings", label: "房源数据管理", icon: Database },
   { path: "/crawl", label: "采集任务管理", icon: Radio },
+  { path: "/quality", label: "数据清洗质量", icon: ShieldCheck },
   { path: "/analysis", label: "分析建模", icon: BarChart2 },
   { path: "/agent", label: "智能问答与报告", icon: MessageSquare },
   { path: "/settings", label: "系统设置", icon: Settings },

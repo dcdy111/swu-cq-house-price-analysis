@@ -1,9 +1,18 @@
 import { ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { BOX_DATA } from "../../mock/model";
 
+interface DistrictBoxItem {
+  district: string;
+  q1: number;
+  median: number;
+  q3: number;
+  min: number;
+  max: number;
+}
+
 // Simulate a box plot using overlapping bars
-export function DistrictBoxPlot() {
-  const data = BOX_DATA.map(d => ({
+export function DistrictBoxPlot({ source = BOX_DATA }: { source?: DistrictBoxItem[] }) {
+  const data = source.map(d => ({
     name: d.district,
     min: d.min,
     q1: d.q1 - d.min,
