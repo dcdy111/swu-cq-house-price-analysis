@@ -154,6 +154,8 @@ class BaseCrawler(ABC):
             "captcha",
             "verifycode",
             "antibot",
+            "check.3g.fang.com",
+            "check.html",
             "esfcommon-captcha",
             "hip.lianjia.com",
             "clogin.lianjia.com/login",
@@ -161,6 +163,8 @@ class BaseCrawler(ABC):
         blocked_text_markers = [
             "@@xxzlgatewayurl",
             "antibot/verifycode",
+            "checkyzm",
+            "请完成下列验证",
         ]
         if any(marker in url for marker in blocked_url_markers):
             return "页面被登录、验证码或反爬网关拦截"

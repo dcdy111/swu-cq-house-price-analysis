@@ -6,6 +6,10 @@ venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.codex-run/
+output/playwright/
+test-results/
+playwright-report/
 instance/
 *.sqlite
 *.db

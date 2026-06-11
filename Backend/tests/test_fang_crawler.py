@@ -29,3 +29,13 @@ def test_fang_parse_sample_html():
     assert item["unit_price"] == 22727
     assert item["area"] == 308
     assert item["layout"] == "5室3厅"
+
+
+def test_fang_check_gateway_is_detected_as_blocked():
+    crawler = FangCrawler(interval=(0, 0))
+    reason = crawler.detect_blocked(
+        "https://check.3g.fang.com/check.html?backurl=https%3A%2F%2Fcq.esf.fang.com%2Fhouse-a056%2F",
+        "<html><body>请完成下列验证后继续<script src='checkyzm.min.js'></script></body></html>",
+    )
+
+    assert reason == "页面被登录、验证码或反爬网关拦截"
