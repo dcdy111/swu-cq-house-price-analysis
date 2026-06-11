@@ -21,7 +21,7 @@ import { PriceTrendLine } from "../charts/PriceTrendLine";
 import { AreaPriceScatter } from "../charts/AreaPriceScatter";
 import { LayoutDonut } from "../charts/LayoutDonut";
 import { PriceDistributionBar } from "../charts/PriceDistributionBar";
-import { ChongqingHeatMap, ChongqingMapMetric } from "../charts/ChongqingHeatMap";
+import { ChongqingHeatMap, ChongqingMapMetric, District } from "../charts/ChongqingHeatMap";
 import {
   api,
   AreaPricePoint,
@@ -32,7 +32,6 @@ import {
   PriceDistributionItem,
   PriceTrendItem,
 } from "../../services/api";
-import { DISTRICTS, District } from "../../mock/districts";
 
 type DashboardDistrict = District & { rawDistricts?: string[] };
 
@@ -66,7 +65,9 @@ function statusLabel(status: string) {
     success: "完成",
     failed: "失败",
     partial_failed: "部分失败",
-    pending: "待运行",
+  pending: "待运行",
+  canceled: "已取消",
+  cancel_requested: "取消中",
   };
   return labels[status] ?? status;
 }
@@ -85,16 +86,16 @@ function mapDistricts(items: DistrictMapItem[]): DashboardDistrict[] {
 export function DashboardPage() {
   const navigate = useNavigate();
   const [mapMetric, setMapMetric] = useState<ChongqingMapMetric>("avgPrice");
-  const [selectedDistrict, setSelectedDistrict] = useState<DashboardDistrict | null>(DISTRICTS[0]);
+  const [selectedDistrict, setSelectedDistrict] = useState<DashboardDistrict | null>(null);
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [districtPrice, setDistrictPrice] = useState<DistrictPriceItem[]>([]);
-  const [mapData, setMapData] = useState<DashboardDistrict[]>(DISTRICTS);
+  const [mapData, setMapData] = useState<DashboardDistrict[]>([]);
   const [trendData, setTrendData] = useState<PriceTrendItem[]>([]);
   const [scatterData, setScatterData] = useState<AreaPricePoint[]>([]);
   const [layoutData, setLayoutData] = useState<LayoutDistributionItem[]>([]);
   const [priceDistribution, setPriceDistribution] = useState<PriceDistributionItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [usingMock, setUsingMock] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const loadDashboard = () => {
     setLoading(true);
@@ -116,22 +117,22 @@ export function DashboardPage() {
         setScatterData(scatter.items);
         setLayoutData(layout.items);
         setPriceDistribution(distribution.items);
-        setUsingMock(false);
+        setError(null);
         setSelectedDistrict(prev => {
           if (districts.length === 0) return null;
           return districts.find(item => item.name === prev?.name) ?? districts[0];
         });
       })
-      .catch(() => {
+      .catch(err => {
         setOverview(null);
         setDistrictPrice([]);
-        setMapData(DISTRICTS);
+        setMapData([]);
         setTrendData([]);
         setScatterData([]);
         setLayoutData([]);
         setPriceDistribution([]);
-        setUsingMock(true);
-        setSelectedDistrict(prev => prev ?? DISTRICTS[0]);
+        setSelectedDistrict(null);
+        setError(err instanceof Error ? err.message : "Dashboard 数据加载失败");
       })
       .finally(() => setLoading(false));
   };
@@ -141,8 +142,6 @@ export function DashboardPage() {
   }, []);
 
   const kpis = overview?.kpis;
-  const fallbackTotal = DISTRICTS.reduce((sum, item) => sum + item.count, 0);
-  const fallbackAvgPrice = Math.round(DISTRICTS.reduce((sum, item) => sum + item.avgPrice * item.count, 0) / fallbackTotal);
   const topDistrict = overview?.top_district;
   const latestDate = kpis?.latest_updated_at?.slice(0, 10) ?? "暂无更新时间";
 
@@ -150,20 +149,20 @@ export function DashboardPage() {
     () => [
       {
         title: "房源总数",
-        value: fmt(kpis?.total_count ?? fallbackTotal),
+        value: fmt(kpis?.total_count),
         unit: "套",
         icon: <Building2 size={18} style={{ color: "#4F7DBD" }} />,
         accent: true,
       },
       {
         title: "有效在售",
-        value: fmt(kpis?.active_count ?? fallbackTotal),
+        value: fmt(kpis?.active_count),
         unit: "套",
         icon: <TrendingUp size={18} style={{ color: "#E67E22" }} />,
       },
       {
         title: "挂牌均价",
-        value: fmt(kpis?.avg_unit_price ?? fallbackAvgPrice),
+        value: fmt(kpis?.avg_unit_price),
         unit: "元/㎡",
         icon: <BarChart3 size={18} style={{ color: "#163A70" }} />,
       },
@@ -175,13 +174,13 @@ export function DashboardPage() {
       },
       {
         title: "数据完整率",
-        value: fmt(kpis?.data_complete_rate ?? 94.6, 1),
+        value: fmt(kpis?.data_complete_rate, 1),
         unit: "%",
         icon: <Activity size={18} style={{ color: "#4F7DBD" }} />,
       },
       {
         title: "区县覆盖",
-        value: fmt(kpis?.district_count ?? DISTRICTS.length),
+        value: fmt(kpis?.district_count),
         unit: "个",
         icon: <MapPin size={18} style={{ color: "#E67E22" }} />,
       },
@@ -192,7 +191,7 @@ export function DashboardPage() {
         icon: <Bot size={18} style={{ color: "#163A70" }} />,
       },
     ],
-    [fallbackAvgPrice, fallbackTotal, kpis]
+    [kpis]
   );
 
   const focusListingSearch = (district: DashboardDistrict) => {
@@ -222,13 +221,19 @@ export function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <StatusTag status={loading ? "running" : usingMock ? "warn" : "success"} label={loading ? "加载中" : usingMock ? "演示数据" : "后端数据"} />
+          <StatusTag status={loading ? "running" : error ? "failed" : "success"} label={loading ? "加载中" : error ? "接口异常" : "后端数据"} />
           <Button variant="outline" size="sm" onClick={loadDashboard} disabled={loading} style={{ fontSize: 12, height: 34 }}>
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
             刷新
           </Button>
         </div>
       </div>
+
+      {error && (
+        <div className="rounded-lg px-4 py-3" style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B", fontSize: 13 }}>
+          Dashboard 后端数据加载失败：{error}。请确认后端服务、鉴权 token 和数据库连接正常后重试。
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         {kpiData.map(kpi => (
@@ -268,9 +273,9 @@ export function DashboardPage() {
           <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
             {[
               ["当前区县", selectedDistrict?.name ?? "全市"],
-              ["挂牌均价", selectedDistrict ? `${fmt(selectedDistrict.avgPrice)} 元/㎡` : `${fmt(kpis?.avg_unit_price ?? fallbackAvgPrice)} 元/㎡`],
-              ["采集样本", selectedDistrict ? `${fmt(selectedDistrict.count)} 套` : `${fmt(kpis?.total_count ?? fallbackTotal)} 套`],
-              ["质量分", selectedDistrict ? `${fmt(selectedDistrict.quality, 1)} 分` : `${fmt(kpis?.avg_quality ?? 94.6, 1)} 分`],
+              ["挂牌均价", selectedDistrict ? `${fmt(selectedDistrict.avgPrice)} 元/㎡` : `${fmt(kpis?.avg_unit_price)} 元/㎡`],
+              ["采集样本", selectedDistrict ? `${fmt(selectedDistrict.count)} 套` : `${fmt(kpis?.total_count)} 套`],
+              ["质量分", selectedDistrict ? `${fmt(selectedDistrict.quality, 1)} 分` : `${fmt(kpis?.avg_quality, 1)} 分`],
             ].map(([label, value]) => (
               <div key={label} className="rounded-lg px-3 py-2" style={{ background: "#F7F9FC", border: "1px solid #E5EAF2" }}>
                 <div style={{ fontSize: 11, color: "#9CA3AF" }}>{label}</div>

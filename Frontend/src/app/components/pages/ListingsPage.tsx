@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Download, SlidersHorizontal, X, RefreshCw } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -9,7 +9,6 @@ import { Badge } from "../ui/badge";
 import { SectionCard } from "../common/SectionCard";
 import { StatusTag } from "../common/StatusTag";
 import { api, ListingItem, ListingOptions, listingsExportUrl } from "../../services/api";
-import { DISTRICT_OPTIONS, LISTINGS } from "../../mock/listings";
 import { toast } from "sonner";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -17,72 +16,6 @@ const STATUS_LABEL: Record<string, string> = {
   inactive: "下架",
   abnormal: "异常",
 };
-
-function toListingItem(item: typeof LISTINGS[number], index: number): ListingItem {
-  return {
-    id: index + 1,
-    source: item.source,
-    source_listing_id: item.id,
-    title: item.title,
-    link: "#",
-    district: item.district,
-    community: item.area,
-    address: item.address,
-    total_price: item.totalPrice,
-    unit_price: item.unitPrice,
-    area: item.size,
-    layout: item.layout,
-    floor_text: item.floor,
-    build_year: item.buildYear,
-    house_age: 2026 - item.buildYear,
-    tags: item.tags,
-    data_quality_score: 92 + (index % 7),
-    status: item.status === "sold" ? "inactive" : "active",
-    last_seen_at: item.crawledAt,
-    updated_at: item.crawledAt,
-  };
-}
-
-function filterMockListings(params: Record<string, string | number | undefined>) {
-  const keyword = String(params.keyword || "").trim();
-  const district = String(params.district || "");
-  const source = String(params.source || "");
-  const priceMin = Number(params.price_min || 0);
-  const priceMax = Number(params.price_max || 0);
-  const rows = LISTINGS.map(toListingItem).filter(item => {
-    const hitKeyword = !keyword || [item.title, item.community, item.address, item.district, item.source].some(value => value?.includes(keyword));
-    const hitDistrict = !district || item.district === district;
-    const hitSource = !source || item.source === source;
-    const hitMin = !priceMin || Number(item.total_price || 0) >= priceMin;
-    const hitMax = !priceMax || Number(item.total_price || 0) <= priceMax;
-    return hitKeyword && hitDistrict && hitSource && hitMin && hitMax;
-  });
-  return rows;
-}
-
-function downloadCsv(filename: string, rows: ListingItem[]) {
-  const headers = ["ID", "标题", "区县", "小区", "面积", "总价(万元)", "单价(元/㎡)", "来源", "状态", "最近采集"];
-  const body = rows.map(item => [
-    item.id,
-    item.title,
-    item.district,
-    item.community || "",
-    item.area || "",
-    item.total_price || "",
-    item.unit_price || "",
-    item.source,
-    STATUS_LABEL[item.status] || item.status,
-    item.last_seen_at || item.updated_at || "",
-  ]);
-  const csv = [headers, ...body].map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 export function ListingsPage() {
   const [items, setItems] = useState<ListingItem[]>([]);
@@ -92,8 +25,7 @@ export function ListingsPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
-  const [usingMock, setUsingMock] = useState(false);
-  const mockWarnedRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [keyword, setKeyword] = useState("");
   const [district, setDistrict] = useState("全部区县");
@@ -122,10 +54,7 @@ export function ListingsPage() {
       sessionStorage.removeItem("listingSearch");
     }
     api.getListingOptions().then(setOptions).catch(() => {
-      setOptions({
-        districts: DISTRICT_OPTIONS.filter(item => item !== "全部区县"),
-        sources: Array.from(new Set(LISTINGS.map(item => item.source))),
-      });
+      setOptions({ districts: [], sources: [] });
     });
   }, []);
 
@@ -134,22 +63,18 @@ export function ListingsPage() {
     api
       .getListings(queryParams)
       .then(data => {
-        setUsingMock(false);
         setItems(data.items);
         setTotal(data.pagination.total);
         setPages(Math.max(1, data.pagination.pages || 1));
+        setError(null);
       })
       .catch(error => {
-        const fallbackRows = filterMockListings(queryParams);
-        const start = (page - 1) * 20;
-        setUsingMock(true);
-        setItems(fallbackRows.slice(start, start + 20));
-        setTotal(fallbackRows.length);
-        setPages(Math.max(1, Math.ceil(fallbackRows.length / 20)));
-        if (!mockWarnedRef.current) {
-          toast.warning(`${error.message || "后端 API 未连接"}，已切换前端演示数据`);
-          mockWarnedRef.current = true;
-        }
+        const message = error instanceof Error ? error.message : "房源数据加载失败";
+        setItems([]);
+        setTotal(0);
+        setPages(1);
+        setError(message);
+        toast.error(message);
       })
       .finally(() => setLoading(false));
   }, [queryParams, reloadKey]);
@@ -165,9 +90,8 @@ export function ListingsPage() {
   };
 
   const exportCsv = () => {
-    if (usingMock) {
-      downloadCsv("chongqing-listings-demo.csv", filterMockListings(queryParams));
-      toast.success("已导出演示数据 CSV");
+    if (error) {
+      toast.error("当前房源接口异常，不能导出 CSV");
       return;
     }
     window.open(listingsExportUrl(queryParams), "_blank");
@@ -179,18 +103,24 @@ export function ListingsPage() {
         <div>
           <h2 style={{ color: "#163A70", fontSize: 18, fontWeight: 700 }}>房源数据管理</h2>
           <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 2 }}>
-            共 {total.toLocaleString()} 条记录 · {usingMock ? "前端演示数据" : "数据来自后端数据库"}
+            共 {total.toLocaleString()} 条记录 · 数据来自后端数据库
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setReloadKey(x => x + 1)} className="flex items-center gap-2">
             <RefreshCw size={14} />刷新
           </Button>
-          <Button variant="outline" size="sm" onClick={exportCsv} className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={exportCsv} disabled={Boolean(error) || loading} className="flex items-center gap-2">
             <Download size={14} />导出 CSV
           </Button>
         </div>
       </div>
+
+      {error && (
+        <div className="rounded-lg px-4 py-3" style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B", fontSize: 13 }}>
+          房源接口加载失败：{error}。当前页面不会切换到演示数据，请恢复后端连接后刷新。
+        </div>
+      )}
 
       <SectionCard>
         <div className="flex flex-wrap gap-3 items-center">

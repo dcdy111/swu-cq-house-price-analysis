@@ -1,6 +1,5 @@
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { LayoutDistributionItem } from "../../services/api";
-import { LAYOUT_DIST } from "../../mock/trend";
 
 const COLORS = ["#163A70", "#1F4E8C", "#4F7DBD", "#E67E22", "#F59E0B", "#9CA3AF"];
 
@@ -9,7 +8,7 @@ interface LayoutDonutProps {
 }
 
 export function LayoutDonut({ data: apiData }: LayoutDonutProps) {
-  const data = apiData && apiData.length > 0 ? apiData : LAYOUT_DIST;
+  const data = apiData && apiData.length > 0 ? apiData : [];
   return (
     <ResponsiveContainer width="100%" height={200}>
       <PieChart>

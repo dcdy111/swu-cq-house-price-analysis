@@ -1,28 +1,20 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { SectionCard } from "../common/SectionCard";
 import { StatusTag } from "../common/StatusTag";
 import { toast } from "sonner";
-import { Eye, EyeOff, CheckCircle, Server, Database, Cpu, Globe, ChevronDown, ChevronUp, Zap } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Save, Server, Database, Cpu, Globe } from "lucide-react";
+import { api, type SystemSettings } from "../../services/api";
 
-const SOURCES = [
-  { name: "链家", url: "https://cq.lianjia.com", enabled: true, status: "success" as const, count: "33,500" },
-  { name: "贝壳找房", url: "https://cq.ke.com", enabled: true, status: "success" as const, count: "12,000" },
-  { name: "安居客", url: "https://cq.anjuke.com", enabled: true, status: "failed" as const, count: "2,720" },
-  { name: "自定义数据源", url: "http://custom-api.internal", enabled: false, status: "default" as const, count: "—" },
-];
-
-const INITIAL_SCHEDULES = [
-  { name: "全量采集 (每日)", cron: "0 2 * * *", enabled: true },
-  { name: "增量更新 (每6小时)", cron: "0 */6 * * *", enabled: true },
-  { name: "模型重训练 (每周)", cron: "0 4 * * 1", enabled: true },
-  { name: "数据清洗 (每天凌晨)", cron: "0 3 * * *", enabled: false },
-];
+const SOURCE_LABELS: Record<string, string> = {
+  fang: "房天下",
+  anjuke_mobile: "安居客移动端",
+  lianjia: "链家",
+};
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -33,355 +25,194 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const MODEL_PROVIDERS = [
-  {
-    id: "deepseek",
-    name: "DeepSeek",
-    badge: "默认",
-    tagline: "深度求索 · 国产领先大模型",
-    color: "#163A70",
-    models: ["deepseek-v3", "deepseek-r1", "deepseek-chat"],
-    defaultModel: "deepseek-v3",
-    endpoint: "https://api.deepseek.com/v1",
-    keyPlaceholder: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    defaultKey: "sk-deepseek-xxxxxxxxxxxxxxxxxxxx",
-    enabled: true,
-  },
-  {
-    id: "qwen",
-    name: "通义千问",
-    badge: "阿里云",
-    tagline: "阿里云 · 通义千问系列",
-    color: "#7C3AED",
-    models: ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long"],
-    defaultModel: "qwen-max",
-    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    keyPlaceholder: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    defaultKey: "",
-    enabled: false,
-  },
-  {
-    id: "ernie",
-    name: "文心一言",
-    badge: "百度",
-    tagline: "百度智能云 · 文心大模型",
-    color: "#0284C7",
-    models: ["ERNIE-4.0-8K", "ERNIE-3.5-8K", "ERNIE-Speed-8K"],
-    defaultModel: "ERNIE-4.0-8K",
-    endpoint: "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat",
-    keyPlaceholder: "API Key（同时需要 Secret Key）",
-    defaultKey: "",
-    enabled: false,
-  },
-  {
-    id: "glm",
-    name: "智谱 AI",
-    badge: "GLM",
-    tagline: "智谱 · ChatGLM 系列",
-    color: "#059669",
-    models: ["glm-4", "glm-4-flash", "glm-3-turbo"],
-    defaultModel: "glm-4",
-    endpoint: "https://open.bigmodel.cn/api/paas/v4",
-    keyPlaceholder: "xxxxxxxx.xxxxxxxxxxxx",
-    defaultKey: "",
-    enabled: false,
-  },
-  {
-    id: "moonshot",
-    name: "月之暗面",
-    badge: "Kimi",
-    tagline: "Moonshot AI · Kimi 长文本模型",
-    color: "#DB2777",
-    models: ["moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"],
-    defaultModel: "moonshot-v1-32k",
-    endpoint: "https://api.moonshot.cn/v1",
-    keyPlaceholder: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    defaultKey: "",
-    enabled: false,
-  },
-  {
-    id: "minimax",
-    name: "MiniMax",
-    badge: "海螺",
-    tagline: "MiniMax · ABAB 多模态大模型",
-    color: "#EA580C",
-    models: ["abab6.5-chat", "abab5.5-chat"],
-    defaultModel: "abab6.5-chat",
-    endpoint: "https://api.minimax.chat/v1",
-    keyPlaceholder: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    defaultKey: "",
-    enabled: false,
-  },
-  {
-    id: "spark",
-    name: "讯飞星火",
-    badge: "科大讯飞",
-    tagline: "科大讯飞 · 星火认知大模型",
-    color: "#0369A1",
-    models: ["spark-max", "spark-pro", "spark-lite"],
-    defaultModel: "spark-max",
-    endpoint: "https://spark-api-open.xf-yun.com/v1",
-    keyPlaceholder: "API Key",
-    defaultKey: "",
-    enabled: false,
-  },
-  {
-    id: "baichuan",
-    name: "百川",
-    badge: "Baichuan",
-    tagline: "百川智能 · 百川大模型",
-    color: "#B45309",
-    models: ["Baichuan4", "Baichuan3-Turbo", "Baichuan2-Turbo"],
-    defaultModel: "Baichuan4",
-    endpoint: "https://api.baichuan-ai.com/v1",
-    keyPlaceholder: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    defaultKey: "",
-    enabled: false,
-  },
-];
+function toNumber(value: string, fallback: number) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
 
-function ApiProviderCard({ provider, isActive, onSetActive }: {
-  provider: typeof MODEL_PROVIDERS[0];
-  isActive: boolean;
-  onSetActive: () => void;
-}) {
-  const [enabled, setEnabled] = useState(provider.enabled);
-  const [expanded, setExpanded] = useState(provider.enabled);
-  const [showKey, setShowKey] = useState(false);
-  const [apiKey, setApiKey] = useState(provider.defaultKey);
-  const [endpoint, setEndpoint] = useState(provider.endpoint);
-  const [selectedModel, setSelectedModel] = useState(provider.defaultModel);
-
-  return (
-    <div className="rounded-xl overflow-hidden transition-all"
-      style={{ border: `1.5px solid ${isActive ? provider.color : "#E5EAF2"}`, background: "#fff" }}>
-      {/* Header row */}
-      <div className="flex items-center gap-3 px-4 py-3">
-        {/* Color dot + name */}
-        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-          style={{ background: `${provider.color}18` }}>
-          <div className="w-3 h-3 rounded-full" style={{ background: provider.color }} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#1F2937" }}>{provider.name}</span>
-            <span className="px-1.5 py-0.5 rounded" style={{ fontSize: 10, background: `${provider.color}18`, color: provider.color, fontWeight: 600 }}>{provider.badge}</span>
-            {isActive && (
-              <span className="px-1.5 py-0.5 rounded flex items-center gap-1" style={{ fontSize: 10, background: "#DCFCE7", color: "#16A34A", fontWeight: 600 }}>
-                <Zap size={9} />当前使用
-              </span>
-            )}
-          </div>
-          <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 1 }}>{provider.tagline}</div>
-        </div>
-        <div className="flex items-center gap-3">
-          <Switch checked={enabled} onCheckedChange={v => { setEnabled(v); if (!v && isActive) toast.info("已关闭，请切换到其他模型"); }} />
-          {enabled && (
-            <button
-              className="px-2.5 py-1 rounded-lg transition-colors"
-              style={{ fontSize: 11, background: isActive ? provider.color : "#F7F9FC", color: isActive ? "#fff" : "#6B7280", border: `1px solid ${isActive ? provider.color : "#E5EAF2"}` }}
-              onClick={onSetActive}>
-              {isActive ? "使用中" : "设为当前"}
-            </button>
-          )}
-          <button onClick={() => setExpanded(v => !v)} style={{ color: "#9CA3AF" }}>
-            {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-        </div>
-      </div>
-
-      {/* Expanded config */}
-      {expanded && (
-        <div className="px-4 pb-4 flex flex-col gap-3" style={{ borderTop: "1px solid #E5EAF2" }}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-            <Field label="API Key">
-              <div className="relative">
-                <Input
-                  type={showKey ? "text" : "password"}
-                  value={apiKey}
-                  onChange={e => setApiKey(e.target.value)}
-                  placeholder={provider.keyPlaceholder}
-                  className="pr-9 font-mono"
-                  style={{ fontSize: 12 }}
-                />
-                <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setShowKey(v => !v)}>
-                  {showKey ? <EyeOff size={13} style={{ color: "#9CA3AF" }} /> : <Eye size={13} style={{ color: "#9CA3AF" }} />}
-                </button>
-              </div>
-            </Field>
-            <Field label="接入端点 (Endpoint)">
-              <Input value={endpoint} onChange={e => setEndpoint(e.target.value)} style={{ fontSize: 12, fontFamily: "monospace" }} />
-            </Field>
-            <Field label="模型版本">
-              <select
-                value={selectedModel}
-                onChange={e => setSelectedModel(e.target.value)}
-                className="w-full rounded-md px-3 h-9 outline-none"
-                style={{ fontSize: 12, border: "1px solid #E5EAF2", background: "#fff", color: "#1F2937" }}>
-                {provider.models.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-            </Field>
-            <Field label="Temperature">
-              <Input type="number" defaultValue="0.7" step="0.1" min="0" max="2" style={{ fontSize: 12 }} />
-            </Field>
-          </div>
-          <div className="flex gap-2 mt-1">
-            <Button size="sm" style={{ background: provider.color, color: "#fff", fontSize: 12, height: 30 }}
-              onClick={() => toast.success(`${provider.name} 连接测试成功`)}>
-              测试连接
-            </Button>
-            <Button size="sm" variant="outline" style={{ fontSize: 12, height: 30 }}
-              onClick={() => toast.success(`${provider.name} 配置已保存`)}>
-              保存
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+function maskStatus(settings: SystemSettings | null) {
+  if (!settings?.deepseek.api_key_configured) return "未配置";
+  return settings.deepseek.api_key_masked || "已配置";
 }
 
 export function SettingsPage() {
-  const [activeProvider, setActiveProvider] = useState("deepseek");
-  const [sources, setSources] = useState(SOURCES);
-  const [addSourceOpen, setAddSourceOpen] = useState(false);
-  const [newSourceName, setNewSourceName] = useState("");
-  const [newSourceUrl, setNewSourceUrl] = useState("");
-  const [schedules, setSchedules] = useState(INITIAL_SCHEDULES);
-  const [editingSchedule, setEditingSchedule] = useState<{ name: string; cron: string; enabled: boolean } | null>(null);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
-  const saveBasic = () => {
-    const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-    setSavedAt(time);
-    toast.success(`设置已保存 ${time}`);
+  const loadSettings = () => {
+    setLoading(true);
+    api.getSettings()
+      .then(data => {
+        setSettings(data);
+        setApiKey("");
+        setError(null);
+      })
+      .catch(err => {
+        const message = err instanceof Error ? err.message : "系统设置加载失败";
+        setSettings(null);
+        setError(message);
+        toast.error(message);
+      })
+      .finally(() => setLoading(false));
   };
 
-  const addSource = () => {
-    if (!newSourceName.trim() || !newSourceUrl.trim()) {
-      toast.warning("请填写数据源名称和 URL");
-      return;
-    }
-    setSources(prev => [
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const updateCrawler = (patch: Partial<SystemSettings["crawler"]>) => {
+    setSettings(prev => prev ? { ...prev, crawler: { ...prev.crawler, ...patch } } : prev);
+  };
+
+  const updateSource = (key: string, enabled: boolean) => {
+    setSettings(prev => prev ? {
       ...prev,
-      { name: newSourceName.trim(), url: newSourceUrl.trim(), enabled: true, status: "success" as const, count: "0" },
-    ]);
-    setNewSourceName("");
-    setNewSourceUrl("");
-    setAddSourceOpen(false);
-    toast.success("自定义数据源已添加");
+      crawler: {
+        ...prev.crawler,
+        sources: {
+          ...prev.crawler.sources,
+          [key]: { ...(prev.crawler.sources[key] || {}), enabled },
+        },
+      },
+    } : prev);
   };
 
-  const updateSchedule = () => {
-    if (!editingSchedule?.cron.trim()) {
-      toast.warning("Cron 表达式不能为空");
-      return;
-    }
-    setSchedules(prev => prev.map(item => item.name === editingSchedule.name ? editingSchedule : item));
-    setEditingSchedule(null);
-    toast.success("调度计划已更新");
+  const updateScheduler = (patch: Partial<SystemSettings["scheduler"]>) => {
+    setSettings(prev => prev ? { ...prev, scheduler: { ...prev.scheduler, ...patch } } : prev);
   };
+
+  const updateDeepSeek = (patch: Partial<SystemSettings["deepseek"]>) => {
+    setSettings(prev => prev ? { ...prev, deepseek: { ...prev.deepseek, ...patch } } : prev);
+  };
+
+  const saveSettings = async () => {
+    if (!settings) return;
+    setSaving(true);
+    try {
+      const payload: Partial<SystemSettings> = {
+        crawler: settings.crawler,
+        scheduler: settings.scheduler,
+        deepseek: {
+          enabled: settings.deepseek.enabled,
+          base_url: settings.deepseek.base_url,
+          model: settings.deepseek.model,
+          timeout: settings.deepseek.timeout,
+          ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+        },
+      };
+      const next = await api.updateSettings(payload);
+      setSettings(next);
+      setApiKey("");
+      setError(null);
+      toast.success("系统设置已保存到后端");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "系统设置保存失败";
+      toast.error(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearApiKey = async () => {
+    setSaving(true);
+    try {
+      const next = await api.updateSettings({ deepseek: { clear_api_key: true } });
+      setSettings(next);
+      setApiKey("");
+      toast.success("DeepSeek API Key 已从后端清除");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "API Key 清除失败";
+      toast.error(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testDeepSeek = async () => {
+    setTesting(true);
+    try {
+      if (apiKey.trim()) {
+        const next = await api.updateSettings({ deepseek: { ...settings?.deepseek, api_key: apiKey.trim() } });
+        setSettings(next);
+        setApiKey("");
+      }
+      const result = await api.testDeepSeek();
+      if (result.ok) {
+        toast.success(result.message);
+      } else {
+        toast.error(result.message);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "DeepSeek 连接测试失败";
+      toast.error(message);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const sourceEntries = Object.entries(settings?.crawler.sources ?? {});
 
   return (
     <div className="flex flex-col gap-5">
-      <div>
-        <h2 style={{ color: "#163A70", fontSize: 18, fontWeight: 700 }}>系统设置</h2>
-        <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 2 }}>配置系统基础参数、数据源、采集策略及 API 密钥</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 style={{ color: "#163A70", fontSize: 18, fontWeight: 700 }}>系统设置</h2>
+          <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 2 }}>读取和保存后端 system_settings，不再使用前端静态状态</p>
+        </div>
+        <div className="flex gap-2">
+          <StatusTag status={loading ? "running" : error ? "failed" : "success"} label={loading ? "加载中" : error ? "接口异常" : "后端设置"} />
+          <Button variant="outline" size="sm" onClick={loadSettings} disabled={loading} className="flex items-center gap-1.5">
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />刷新
+          </Button>
+          <Button size="sm" onClick={saveSettings} disabled={!settings || saving} className="flex items-center gap-1.5" style={{ background: "#163A70", color: "#fff" }}>
+            <Save size={13} />{saving ? "保存中..." : "保存设置"}
+          </Button>
+        </div>
       </div>
 
-      <Tabs defaultValue="basic">
+      {error && (
+        <div className="rounded-lg px-4 py-3" style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B", fontSize: 13 }}>
+          设置接口加载失败：{error}。当前页不会显示静态演示配置。
+        </div>
+      )}
+
+      <Tabs defaultValue="sources">
         <TabsList>
-          {["basic", "sources", "crawl", "schedule", "api", "deploy"].map((t, i) => (
+          {["sources", "crawl", "schedule", "api", "runtime"].map((t, i) => (
             <TabsTrigger key={t} value={t} style={{ fontSize: 13 }}>
-              {["基础设置", "数据源", "采集策略", "调度设置", "API 密钥", "部署信息"][i]}
+              {["数据源", "采集策略", "调度设置", "Agent 配置", "运行信息"][i]}
             </TabsTrigger>
           ))}
         </TabsList>
 
-        <TabsContent value="basic">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-4">
-            <SectionCard title="基础信息">
-              <div className="flex flex-col gap-4">
-                <Field label="系统名称">
-                  <Input defaultValue="重庆二手房价格数据分析与智能可视化系统" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="系统版本">
-                  <Input defaultValue="v2.3.1" style={{ fontSize: 13 }} readOnly />
-                </Field>
-                <Field label="管理员邮箱">
-                  <Input defaultValue="admin@swu.edu.cn" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="数据刷新间隔 (分钟)">
-                  <Input type="number" defaultValue="30" style={{ fontSize: 13 }} />
-                </Field>
-                <Button style={{ background: "#163A70", color: "#fff", fontSize: 13, width: "fit-content" }}
-                  onClick={saveBasic}>
-                  保存设置
-                </Button>
-                {savedAt && <span style={{ fontSize: 12, color: "#16A34A" }}>上次保存：{savedAt}</span>}
-              </div>
-            </SectionCard>
-
-            <SectionCard title="界面设置">
-              <div className="flex flex-col gap-4">
-                {[
-                  { label: "显示数据更新时间", defaultChecked: true },
-                  { label: "启用深色模式", defaultChecked: false },
-                  { label: "侧栏默认展开", defaultChecked: true },
-                  { label: "图表动画效果", defaultChecked: true },
-                  { label: "消息通知提醒", defaultChecked: true },
-                ].map(({ label, defaultChecked }) => (
-                  <div key={label} className="flex items-center justify-between py-2" style={{ borderBottom: "1px solid #E5EAF2" }}>
-                    <span style={{ fontSize: 13, color: "#1F2937" }}>{label}</span>
-                    <Switch defaultChecked={defaultChecked} />
-                  </div>
-                ))}
-              </div>
-            </SectionCard>
-          </div>
-        </TabsContent>
-
         <TabsContent value="sources">
           <div className="mt-4">
-            <SectionCard title="数据源配置" subtitle="管理房产数据采集来源">
+            <SectionCard title="数据源开关" subtitle="保存后将影响 CrawlerRegistry 的可用数据源判断">
               <div className="flex flex-col gap-4">
-                {sources.map(src => (
-                  <div key={src.name} className="p-4 rounded-xl" style={{ border: "1px solid #E5EAF2" }}>
+                {sourceEntries.length === 0 && (
+                  <div style={{ fontSize: 13, color: "#9CA3AF", padding: 20 }}>
+                    暂无后端数据源配置。
+                  </div>
+                )}
+                {sourceEntries.map(([key, cfg]) => (
+                  <div key={key} className="p-4 rounded-xl" style={{ border: "1px solid #E5EAF2" }}>
                     <div className="flex items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
-                        <Switch
-                          checked={src.enabled}
-                          onCheckedChange={checked => {
-                            setSources(prev => prev.map(item => item.name === src.name ? {
-                              ...item,
-                              enabled: checked,
-                              status: checked ? "success" : "default",
-                            } : item));
-                          }}
-                        />
+                        <Switch checked={Boolean(cfg.enabled)} onCheckedChange={checked => updateSource(key, checked)} />
                         <div>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F2937" }}>{src.name}</div>
-                          <div style={{ fontSize: 12, color: "#9CA3AF" }}>{src.url}</div>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F2937" }}>{SOURCE_LABELS[key] ?? key}</div>
+                          <div style={{ fontSize: 12, color: "#9CA3AF" }}>source key: {key}</div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <span style={{ fontSize: 12, color: "#6B7280" }}>已采集: {src.count}</span>
-                        <StatusTag status={src.status} label={src.status === "success" ? "连接正常" : src.status === "failed" ? "连接失败" : "未启用"} />
-                        <Button size="sm" variant="outline" style={{ fontSize: 12 }}
-                          onClick={() => {
-                            setSources(prev => prev.map(item => item.name === src.name ? { ...item, status: item.enabled ? "success" : "default" } : item));
-                            toast.success(`${src.name} 连接测试完成`);
-                          }}>
-                          测试连接
-                        </Button>
-                      </div>
+                      <StatusTag status={cfg.enabled ? "success" : "default"} label={cfg.enabled ? "启用" : "禁用"} />
                     </div>
                   </div>
                 ))}
-                <Button variant="outline" style={{ fontSize: 13, width: "fit-content" }}
-                  onClick={() => setAddSourceOpen(true)}>
-                  + 添加自定义数据源
-                </Button>
               </div>
             </SectionCard>
           </div>
@@ -392,68 +223,84 @@ export function SettingsPage() {
             <SectionCard title="采集参数">
               <div className="flex flex-col gap-4">
                 <Field label="默认并发数">
-                  <Input type="number" defaultValue="5" style={{ fontSize: 13 }} />
+                  <Input type="number" value={settings?.crawler.max_workers ?? ""} min={1} max={10}
+                    onChange={e => updateCrawler({ max_workers: toNumber(e.target.value, 3) })} style={{ fontSize: 13 }} />
                 </Field>
                 <Field label="请求超时 (秒)">
-                  <Input type="number" defaultValue="30" style={{ fontSize: 13 }} />
+                  <Input type="number" value={settings?.crawler.request_timeout ?? ""}
+                    onChange={e => updateCrawler({ request_timeout: toNumber(e.target.value, 15) })} style={{ fontSize: 13 }} />
                 </Field>
-                <Field label="重试次数">
-                  <Input type="number" defaultValue="3" style={{ fontSize: 13 }} />
+                <Field label="最小请求间隔 (秒)">
+                  <Input type="number" value={settings?.crawler.interval_min ?? ""} step="0.1"
+                    onChange={e => updateCrawler({ interval_min: toNumber(e.target.value, 1) })} style={{ fontSize: 13 }} />
                 </Field>
-                <Field label="请求间隔 (毫秒)">
-                  <Input type="number" defaultValue="500" style={{ fontSize: 13 }} />
+                <Field label="最大请求间隔 (秒)">
+                  <Input type="number" value={settings?.crawler.interval_max ?? ""} step="0.1"
+                    onChange={e => updateCrawler({ interval_max: toNumber(e.target.value, 3) })} style={{ fontSize: 13 }} />
                 </Field>
-                <Field label="User-Agent 轮换">
-                  <Switch defaultChecked={true} />
-                </Field>
-                <Field label="IP 代理池">
-                  <Input defaultValue="proxy.internal:3128" style={{ fontSize: 13, fontFamily: "monospace" }} />
-                </Field>
-                <Button style={{ background: "#163A70", color: "#fff", fontSize: 13, width: "fit-content" }}
-                  onClick={() => toast.success("采集参数已保存")}>保存</Button>
               </div>
             </SectionCard>
 
-            <SectionCard title="存储配置">
-              <div className="flex flex-col gap-4">
-                <Field label="MySQL 主机">
-                  <Input defaultValue="localhost" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="端口">
-                  <Input defaultValue="3306" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="数据库名">
-                  <Input defaultValue="chongqing_housing" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="去重策略">
-                  <Input defaultValue="URL + 价格 + 面积 hash" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="数据保留天数">
-                  <Input type="number" defaultValue="365" style={{ fontSize: 13 }} />
-                </Field>
+            <SectionCard title="存储说明">
+              <div className="flex flex-col gap-3" style={{ fontSize: 13, color: "#4B5563", lineHeight: 1.8 }}>
+                <p>运行期数据库统一使用后端配置的 MySQL，前端不保存数据库连接信息。</p>
+                <p>去重、快照和质量评分逻辑由后端 service 层执行；本页只保存采集参数和数据源开关。</p>
+                <p>保存设置后，新创建的采集任务会读取最新配置。</p>
               </div>
             </SectionCard>
           </div>
         </TabsContent>
 
         <TabsContent value="schedule">
-          <div className="mt-4">
-            <SectionCard title="调度计划" subtitle="配置自动采集 Cron 表达式">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-4">
+            <SectionCard title="调度总开关">
               <div className="flex flex-col gap-4">
-                {schedules.map(({ name, cron, enabled }) => (
-                  <div key={name} className="flex items-center gap-4 p-4 rounded-xl" style={{ border: "1px solid #E5EAF2" }}>
-                    <Switch
-                      checked={enabled}
-                      onCheckedChange={checked => setSchedules(prev => prev.map(item => item.name === name ? { ...item, enabled: checked } : item))}
-                    />
-                    <div className="flex-1">
-                      <div style={{ fontSize: 13, fontWeight: 500, color: "#1F2937" }}>{name}</div>
-                    </div>
-                    <code style={{ fontSize: 12, color: "#163A70", background: "#EFF6FF", padding: "2px 8px", borderRadius: 4 }}>{cron}</code>
-                    <Button size="sm" variant="outline" style={{ fontSize: 12 }}
-                      onClick={() => setEditingSchedule({ name, cron, enabled })}>编辑</Button>
-                  </div>
-                ))}
+                <label className="flex items-center justify-between py-2" style={{ borderBottom: "1px solid #E5EAF2" }}>
+                  <span style={{ fontSize: 13, color: "#1F2937" }}>启用 APScheduler</span>
+                  <Switch checked={Boolean(settings?.scheduler.enabled)} onCheckedChange={checked => updateScheduler({ enabled: checked })} />
+                </label>
+                <Field label="时区">
+                  <Input value={settings?.scheduler.timezone ?? ""} onChange={e => updateScheduler({ timezone: e.target.value })} style={{ fontSize: 13 }} />
+                </Field>
+                <label className="flex items-center justify-between py-2" style={{ borderBottom: "1px solid #E5EAF2" }}>
+                  <span style={{ fontSize: 13, color: "#1F2937" }}>质量报告定时任务</span>
+                  <Switch checked={Boolean(settings?.scheduler.quality_report_job_enabled)} onCheckedChange={checked => updateScheduler({ quality_report_job_enabled: checked })} />
+                </label>
+                <Field label="质量报告间隔 (小时)">
+                  <Input type="number" value={settings?.scheduler.quality_report_interval_hours ?? ""}
+                    onChange={e => updateScheduler({ quality_report_interval_hours: toNumber(e.target.value, 6) })} style={{ fontSize: 13 }} />
+                </Field>
+              </div>
+            </SectionCard>
+
+            <SectionCard title="增量采集定时任务">
+              <div className="flex flex-col gap-4">
+                <label className="flex items-center justify-between py-2" style={{ borderBottom: "1px solid #E5EAF2" }}>
+                  <span style={{ fontSize: 13, color: "#1F2937" }}>启用增量采集任务</span>
+                  <Switch checked={Boolean(settings?.scheduler.incremental_crawl_job_enabled)} onCheckedChange={checked => updateScheduler({ incremental_crawl_job_enabled: checked })} />
+                </label>
+                <Field label="采集间隔 (小时)">
+                  <Input type="number" value={settings?.scheduler.incremental_crawl_interval_hours ?? ""}
+                    onChange={e => updateScheduler({ incremental_crawl_interval_hours: toNumber(e.target.value, 12) })} style={{ fontSize: 13 }} />
+                </Field>
+                <Field label="数据源">
+                  <Input value={settings?.scheduler.incremental_crawl_source ?? ""}
+                    onChange={e => updateScheduler({ incremental_crawl_source: e.target.value })} style={{ fontSize: 13 }} />
+                </Field>
+                <Field label="区县，英文逗号分隔">
+                  <Input value={settings?.scheduler.incremental_crawl_districts ?? ""}
+                    onChange={e => updateScheduler({ incremental_crawl_districts: e.target.value })} style={{ fontSize: 13 }} />
+                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="每区页数">
+                    <Input type="number" value={settings?.scheduler.incremental_crawl_max_pages ?? ""}
+                      onChange={e => updateScheduler({ incremental_crawl_max_pages: toNumber(e.target.value, 1) })} style={{ fontSize: 13 }} />
+                  </Field>
+                  <Field label="并发数">
+                    <Input type="number" value={settings?.scheduler.incremental_crawl_max_workers ?? ""}
+                      onChange={e => updateScheduler({ incremental_crawl_max_workers: toNumber(e.target.value, 2) })} style={{ fontSize: 13 }} />
+                  </Field>
+                </div>
               </div>
             </SectionCard>
           </div>
@@ -461,66 +308,63 @@ export function SettingsPage() {
 
         <TabsContent value="api">
           <div className="flex flex-col gap-5 mt-4">
-            {/* Active model banner */}
-            <div className="flex items-center justify-between px-4 py-3 rounded-xl"
-              style={{ background: "linear-gradient(135deg, #163A70 0%, #1F4E8C 100%)", border: "1px solid #1F4E8C" }}>
-              <div className="flex items-center gap-3">
-                <Zap size={16} style={{ color: "#F59E0B" }} />
-                <span style={{ fontSize: 13, color: "#fff", fontWeight: 600 }}>当前 Agent 使用模型</span>
-                <span className="px-2.5 py-0.5 rounded-full" style={{ fontSize: 12, background: "rgba(255,255,255,0.15)", color: "#fff" }}>
-                  {MODEL_PROVIDERS.find(p => p.id === activeProvider)?.name} · {MODEL_PROVIDERS.find(p => p.id === activeProvider)?.defaultModel}
-                </span>
+            <SectionCard title="DeepSeek Agent 配置" subtitle="API Key 保存到后端，前端只显示 masked 状态">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <label className="flex items-center justify-between py-2 lg:col-span-2" style={{ borderBottom: "1px solid #E5EAF2" }}>
+                  <span style={{ fontSize: 13, color: "#1F2937" }}>启用 DeepSeek</span>
+                  <Switch checked={Boolean(settings?.deepseek.enabled)} onCheckedChange={checked => updateDeepSeek({ enabled: checked })} />
+                </label>
+                <Field label="Base URL">
+                  <Input value={settings?.deepseek.base_url ?? ""} onChange={e => updateDeepSeek({ base_url: e.target.value })} style={{ fontSize: 13, fontFamily: "monospace" }} />
+                </Field>
+                <Field label="模型">
+                  <Input value={settings?.deepseek.model ?? ""} onChange={e => updateDeepSeek({ model: e.target.value })} style={{ fontSize: 13 }} />
+                </Field>
+                <Field label="超时 (秒)">
+                  <Input type="number" value={settings?.deepseek.timeout ?? ""} onChange={e => updateDeepSeek({ timeout: toNumber(e.target.value, 20) })} style={{ fontSize: 13 }} />
+                </Field>
+                <Field label={`API Key 状态：${maskStatus(settings)}`}>
+                  <div className="relative">
+                    <Input
+                      type={showKey ? "text" : "password"}
+                      value={apiKey}
+                      onChange={e => setApiKey(e.target.value)}
+                      placeholder="留空则不覆盖后端 API Key"
+                      className="pr-9 font-mono"
+                      style={{ fontSize: 12 }}
+                    />
+                    <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setShowKey(v => !v)}>
+                      {showKey ? <EyeOff size={13} style={{ color: "#9CA3AF" }} /> : <Eye size={13} style={{ color: "#9CA3AF" }} />}
+                    </button>
+                  </div>
+                </Field>
               </div>
-              <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>仅已启用的模型可设为当前</span>
-            </div>
-
-            {/* Provider cards */}
-            <div className="flex flex-col gap-3">
-              {MODEL_PROVIDERS.map(provider => (
-                <ApiProviderCard
-                  key={provider.id}
-                  provider={provider}
-                  isActive={activeProvider === provider.id}
-                  onSetActive={() => { setActiveProvider(provider.id); toast.success(`已切换至 ${provider.name}`); }}
-                />
-              ))}
-            </div>
-
-            {/* Flask API settings below */}
-            <SectionCard title="Flask API 设置" subtitle="后端服务接口参数">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="API 前缀">
-                  <Input defaultValue="/api/v1" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="跨域白名单">
-                  <Input defaultValue="http://localhost:5173" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="JWT 密钥">
-                  <Input type="password" defaultValue="swu-housing-secret-2026" style={{ fontSize: 13 }} />
-                </Field>
-                <Field label="Token 有效期 (小时)">
-                  <Input type="number" defaultValue="24" style={{ fontSize: 13 }} />
-                </Field>
+              <div className="flex gap-2 mt-4">
+                <Button size="sm" onClick={testDeepSeek} disabled={!settings || testing} style={{ background: "#163A70", color: "#fff", fontSize: 12 }}>
+                  {testing ? "测试中..." : "测试真实连接"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={clearApiKey} disabled={!settings || saving || !settings.deepseek.api_key_configured} style={{ fontSize: 12 }}>
+                  清除后端 API Key
+                </Button>
               </div>
             </SectionCard>
           </div>
         </TabsContent>
 
-        <TabsContent value="deploy">
+        <TabsContent value="runtime">
           <div className="mt-4">
-            <SectionCard title="部署信息" subtitle="当前运行环境与服务状态">
+            <SectionCard title="运行信息" subtitle="本轮暂不部署，以下仅为当前项目运行依赖说明">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { icon: <Server size={20} style={{ color: "#163A70" }} />, title: "Web 服务", items: ["Flask 2.3.2", "Gunicorn 21.2.0", "Nginx 1.24"] },
-                  { icon: <Database size={20} style={{ color: "#163A70" }} />, title: "数据库", items: ["MySQL 8.0.35", "Redis 7.2", "存储: 24.8 GB"] },
-                  { icon: <Cpu size={20} style={{ color: "#163A70" }} />, title: "服务器", items: ["Ubuntu 22.04 LTS", "16核 64GB RAM", "CPU: 23%  MEM: 41%"] },
-                  { icon: <Globe size={20} style={{ color: "#163A70" }} />, title: "前端", items: ["React 18.3", "Vite 5.4", "Tailwind CSS v4"] },
+                  { icon: <Server size={20} style={{ color: "#163A70" }} />, title: "后端", items: ["Flask API", "本地鉴权", "system_settings"] },
+                  { icon: <Database size={20} style={{ color: "#163A70" }} />, title: "数据库", items: ["MySQL 8.x", "真实房源表", "快照与日志表"] },
+                  { icon: <Cpu size={20} style={{ color: "#163A70" }} />, title: "任务", items: ["多线程采集", "取消任务", "APScheduler"] },
+                  { icon: <Globe size={20} style={{ color: "#163A70" }} />, title: "前端", items: ["Vite", "真实 API 数据", "无 mock 兜底"] },
                 ].map(({ icon, title, items }) => (
                   <div key={title} className="p-4 rounded-xl flex flex-col gap-3" style={{ background: "#F7F9FC", border: "1px solid #E5EAF2" }}>
                     <div className="flex items-center gap-2">
                       {icon}
                       <span style={{ fontSize: 13, fontWeight: 600, color: "#1F2937" }}>{title}</span>
-                      <CheckCircle size={14} style={{ color: "#16A34A", marginLeft: "auto" }} />
                     </div>
                     <div className="flex flex-col gap-1">
                       {items.map(item => (
@@ -534,55 +378,6 @@ export function SettingsPage() {
           </div>
         </TabsContent>
       </Tabs>
-
-      <Dialog open={addSourceOpen} onOpenChange={setAddSourceOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>添加自定义数据源</DialogTitle>
-            <DialogDescription>录入课程设计或后续补采使用的外部房源数据入口。</DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-4">
-            <Field label="数据源名称">
-              <Input value={newSourceName} onChange={e => setNewSourceName(e.target.value)} placeholder="例：本地 CSV 导入源" style={{ fontSize: 13 }} />
-            </Field>
-            <Field label="数据源 URL">
-              <Input value={newSourceUrl} onChange={e => setNewSourceUrl(e.target.value)} placeholder="https://example.com/api/listings" style={{ fontSize: 13 }} />
-            </Field>
-            <Button onClick={addSource} style={{ background: "#163A70", color: "#fff", fontSize: 13 }}>保存数据源</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!editingSchedule} onOpenChange={open => !open && setEditingSchedule(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>编辑调度计划</DialogTitle>
-            <DialogDescription>调整自动采集、清洗或模型训练任务的 Cron 表达式。</DialogDescription>
-          </DialogHeader>
-          {editingSchedule && (
-            <div className="flex flex-col gap-4">
-              <Field label="任务名称">
-                <Input value={editingSchedule.name} readOnly style={{ fontSize: 13 }} />
-              </Field>
-              <Field label="Cron 表达式">
-                <Input
-                  value={editingSchedule.cron}
-                  onChange={e => setEditingSchedule({ ...editingSchedule, cron: e.target.value })}
-                  style={{ fontSize: 13, fontFamily: "monospace" }}
-                />
-              </Field>
-              <label className="flex items-center gap-2" style={{ fontSize: 13, color: "#374151" }}>
-                <Switch
-                  checked={editingSchedule.enabled}
-                  onCheckedChange={checked => setEditingSchedule({ ...editingSchedule, enabled: checked })}
-                />
-                启用该计划
-              </label>
-              <Button onClick={updateSchedule} style={{ background: "#163A70", color: "#fff", fontSize: 13 }}>保存调度</Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

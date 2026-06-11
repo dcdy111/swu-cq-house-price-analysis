@@ -80,6 +80,11 @@ def test_agent_report_generation_is_persisted_and_readable(client):
     assert report_payload["data"]["title"] == "重庆二手房挂牌价市场分析报告"
     assert "market" in report_payload["data"]["evidence"]
 
+    pdf_response = client.get(f"/api/reports/{data['report']['id']}/export.pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.content_type == "application/pdf"
+    assert pdf_response.data.startswith(b"%PDF")
+
 
 def test_agent_tools_are_whitelisted(client):
     response = client.get("/api/agent/tools")

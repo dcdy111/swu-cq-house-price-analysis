@@ -3,14 +3,14 @@ import { Outlet } from "react-router";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 
-export function AppShell() {
+export function AppShell({ onLogout }: { onLogout: () => void }) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "#F7F9FC" }}>
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
       <div className="flex flex-col flex-1 min-w-0">
-        <Topbar />
+        <Topbar onLogout={onLogout} />
         <main className="flex-1 overflow-auto p-6">
           <Outlet />
         </main>

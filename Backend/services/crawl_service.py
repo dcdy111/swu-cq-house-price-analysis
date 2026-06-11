@@ -9,6 +9,7 @@ from Backend.crawlers.registry import get_crawler, list_sources
 from Backend.extensions import db
 from Backend.models.crawl import CrawlLog, CrawlTask
 from Backend.services.listing_service import ListingService
+from Backend.services.settings_service import SettingsService
 
 
 class CrawlService:
@@ -24,7 +25,8 @@ class CrawlService:
             raise ValueError(f"未知数据源: {source}")
 
         max_pages = min(50, max(1, int(payload.get("max_pages") or 1)))
-        config_workers = int(current_app.config["CRAWL_MAX_WORKERS"])
+        crawler_settings = SettingsService.effective_settings(include_secret=False).get("crawler", {})
+        config_workers = int(crawler_settings.get("max_workers") or current_app.config["CRAWL_MAX_WORKERS"])
         max_workers = min(config_workers, max(1, int(payload.get("max_workers") or min(3, config_workers))))
         districts = payload.get("districts") or []
         if isinstance(districts, str):
@@ -77,7 +79,15 @@ class CrawlService:
 
     @staticmethod
     def summary() -> dict:
-        statuses = {"running": 0, "success": 0, "failed": 0, "partial_failed": 0, "pending": 0}
+        statuses = {
+            "running": 0,
+            "success": 0,
+            "failed": 0,
+            "partial_failed": 0,
+            "pending": 0,
+            "canceled": 0,
+            "cancel_requested": 0,
+        }
         rows = db.session.query(CrawlTask.status, db.func.count(CrawlTask.id)).group_by(CrawlTask.status).all()
         for status, count in rows:
             statuses[status] = count
@@ -88,6 +98,8 @@ class CrawlService:
             "failed": statuses.get("failed", 0),
             "partial_failed": statuses.get("partial_failed", 0),
             "pending": statuses.get("pending", 0),
+            "canceled": statuses.get("canceled", 0),
+            "cancel_requested": statuses.get("cancel_requested", 0),
             "total_found": int(today_found),
         }
 
@@ -125,6 +137,8 @@ class CrawlService:
             raise ValueError("任务不存在")
         if task.status == "running":
             raise ValueError("任务正在运行")
+        if task.status in {"canceled", "cancel_requested"}:
+            raise ValueError("任务已取消，不能继续执行")
 
         crawler = get_crawler(task.source)
         if crawler is None:
@@ -161,6 +175,15 @@ class CrawlService:
                     for district, page in jobs
                 }
                 for future in as_completed(future_map):
+                    db.session.refresh(task)
+                    if task.status == "cancel_requested":
+                        for pending_future in future_map:
+                            pending_future.cancel()
+                        task.status = "canceled"
+                        task.finished_at = datetime.utcnow()
+                        db.session.commit()
+                        CrawlService.add_log(task.id, "WARN", "任务已按用户请求取消，未完成页面已停止等待")
+                        return task
                     district, page = future_map[future]
                     try:
                         result = future.result()
@@ -217,3 +240,23 @@ class CrawlService:
             db.session.commit()
             CrawlService.add_log(task.id, "ERROR", f"任务失败: {exc}")
             return task
+
+    @staticmethod
+    def cancel_task(task_id: int) -> CrawlTask:
+        task = db.session.get(CrawlTask, task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        if task.status == "pending":
+            task.status = "canceled"
+            task.finished_at = datetime.utcnow()
+            db.session.commit()
+            CrawlService.add_log(task.id, "WARN", "任务已取消，未开始执行")
+            return task
+        if task.status == "running":
+            task.status = "cancel_requested"
+            db.session.commit()
+            CrawlService.add_log(task.id, "WARN", "已请求取消任务，正在等待当前页面结束")
+            return task
+        if task.status == "cancel_requested":
+            return task
+        raise ValueError(f"当前状态不能取消: {task.status}")

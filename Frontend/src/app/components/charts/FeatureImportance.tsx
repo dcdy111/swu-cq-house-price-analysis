@@ -1,12 +1,11 @@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { FEATURE_IMPORTANCE } from "../../mock/model";
 
 interface FeatureImportanceItem {
   feature: string;
   importance: number;
 }
 
-export function FeatureImportance({ data = FEATURE_IMPORTANCE }: { data?: FeatureImportanceItem[] }) {
+export function FeatureImportance({ data = [] }: { data?: FeatureImportanceItem[] }) {
   return (
     <ResponsiveContainer width="100%" height={280}>
       <BarChart data={data} layout="vertical" margin={{ left: 20, right: 30, top: 5, bottom: 5 }}>

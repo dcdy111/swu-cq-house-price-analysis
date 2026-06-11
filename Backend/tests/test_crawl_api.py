@@ -29,6 +29,36 @@ def test_create_task(client):
     assert list_payload["data"]["pagination"]["total"] == 1
 
 
+def test_cancel_pending_task(client):
+    create_response = client.post(
+        "/api/crawl/tasks",
+        json={"source": "fang", "districts": ["渝中"], "max_pages": 1, "max_workers": 1},
+    )
+    task_id = create_response.get_json()["data"]["id"]
+
+    cancel_response = client.post(f"/api/crawl/tasks/{task_id}/cancel")
+    payload = cancel_response.get_json()
+
+    assert cancel_response.status_code == 200
+    assert payload["code"] == 0
+    assert payload["data"]["status"] == "canceled"
+    assert payload["data"]["logs"][0]["level"] == "WARN"
+    assert "已取消" in payload["data"]["logs"][0]["message"]
+
+
+def test_create_task_respects_backend_crawler_worker_setting(client):
+    client.put("/api/settings", json={"crawler": {"max_workers": 2}})
+
+    response = client.post(
+        "/api/crawl/tasks",
+        json={"source": "fang", "districts": ["渝中"], "max_pages": 1, "max_workers": 5},
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 201
+    assert payload["data"]["max_workers"] == 2
+
+
 def test_disabled_lianjia_run_fails_with_log(client):
     create_response = client.post(
         "/api/crawl/tasks",
@@ -42,4 +72,3 @@ def test_disabled_lianjia_run_fails_with_log(client):
     assert run_response.status_code == 200
     assert payload["data"]["status"] == "failed"
     assert payload["data"]["logs"][0]["level"] == "ERROR"
-

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Bell, Search, User, Circle, LogOut, Settings, CheckCircle2 } from "lucide-react";
 import { Input } from "../ui/input";
@@ -11,17 +11,17 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { toast } from "sonner";
+import { api, getStoredUser } from "../../services/api";
 
-const NOTIFICATIONS = [
-  { title: "安居客任务部分失败", desc: "南岸区第 18-22 页触发频率限制", level: "warn" },
-  { title: "数据质量报告已更新", desc: "全市完整率 94.6%，较昨日提升 0.4%", level: "success" },
-  { title: "模型训练完成", desc: "XGBoost v2.3.1，R²=0.842", level: "success" },
-];
-
-export function Topbar() {
+export function Topbar({ onLogout }: { onLogout: () => void }) {
   const navigate = useNavigate();
   const [keyword, setKeyword] = useState(sessionStorage.getItem("listingSearch") ?? "");
-  const [unread, setUnread] = useState(NOTIFICATIONS.length);
+  const [latestUpdatedAt, setLatestUpdatedAt] = useState<string | null>(null);
+  const user = getStoredUser();
+
+  useEffect(() => {
+    api.getOverview().then(data => setLatestUpdatedAt(data.kpis.latest_updated_at ?? null)).catch(() => setLatestUpdatedAt(null));
+  }, []);
 
   const submitSearch = () => {
     const text = keyword.trim();
@@ -62,32 +62,27 @@ export function Topbar() {
         </div>
 
         {/* Last update */}
-        <span style={{ color: "#9CA3AF", fontSize: 12 }}>数据更新: 2026-06-09 10:30</span>
+        <span style={{ color: "#9CA3AF", fontSize: 12 }}>
+          数据更新: {latestUpdatedAt?.slice(0, 16) ?? "暂无"}
+        </span>
 
         {/* Bell */}
-        <DropdownMenu onOpenChange={open => open && setUnread(0)}>
+        <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="relative rounded-full p-1.5 hover:bg-[#F7F9FC] transition-colors">
               <Bell size={18} style={{ color: "#6B7280" }} />
-              {unread > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center" style={{ background: "#DC2626", fontSize: 10, color: "#fff" }}>
-                  {unread}
-                </span>
-              )}
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-80">
             <DropdownMenuLabel style={{ color: "#163A70", fontSize: 13 }}>系统通知</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            {NOTIFICATIONS.map(item => (
-              <DropdownMenuItem key={item.title} className="items-start gap-2 py-2">
-                <CheckCircle2 size={14} style={{ color: item.level === "success" ? "#16A34A" : "#F59E0B", marginTop: 2 }} />
-                <div className="flex flex-col gap-0.5">
-                  <span style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{item.title}</span>
-                  <span style={{ fontSize: 11, color: "#6B7280" }}>{item.desc}</span>
-                </div>
-              </DropdownMenuItem>
-            ))}
+            <DropdownMenuItem className="items-start gap-2 py-2">
+              <CheckCircle2 size={14} style={{ color: "#16A34A", marginTop: 2 }} />
+              <div className="flex flex-col gap-0.5">
+                <span style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>暂无未读通知</span>
+                <span style={{ fontSize: 11, color: "#6B7280" }}>系统只展示后端返回的真实业务数据。</span>
+              </div>
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -105,24 +100,24 @@ export function Topbar() {
                 <User size={12} style={{ color: "#fff" }} />
               </div>
               <div className="text-left">
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#1F2937", lineHeight: 1.2 }}>admin</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#1F2937", lineHeight: 1.2 }}>{user?.username ?? "admin"}</div>
                 <div style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.2 }}>研究员</div>
               </div>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuLabel style={{ fontSize: 12 }}>张浩博</DropdownMenuLabel>
+            <DropdownMenuLabel style={{ fontSize: 12 }}>{user?.username ?? "admin"}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => navigate("/settings")}>
               <Settings size={14} />
               系统设置
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => toast.success("已刷新当前用户会话")}>
+            <DropdownMenuItem onSelect={() => api.me().then(() => toast.success("当前用户会话有效")).catch(error => toast.error(error.message))}>
               <CheckCircle2 size={14} />
               检查会话
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => navigate("/login")} variant="destructive">
+            <DropdownMenuItem onSelect={() => { api.logout().catch(() => null); onLogout(); navigate("/login"); }} variant="destructive">
               <LogOut size={14} />
               退出登录
             </DropdownMenuItem>

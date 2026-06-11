@@ -8,7 +8,6 @@ import { FeatureImportance } from "../charts/FeatureImportance";
 import { PredVsActualScatter } from "../charts/PredVsActualScatter";
 import { KMeansScatter } from "../charts/KMeansScatter";
 import { DistrictBoxPlot } from "../charts/DistrictBoxPlot";
-import { MODEL_METRICS, ANOMALIES, COMPARE_MODELS } from "../../mock/model";
 import { toast } from "sonner";
 import { RefreshCw, Brain, AlertTriangle, Download, FileText } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
@@ -72,25 +71,24 @@ export function AnalysisPage() {
   const edaResult = useMemo(() => getResult(results, "eda"), [results]);
   const clusterResult = useMemo(() => getResult(results, "cluster"), [results]);
   const anomalyResult = useMemo(() => getResult(results, "anomaly"), [results]);
-  const hasApiRegression = Boolean(regressionResult);
 
   const metricsList = useMemo(
     () => [
       {
         label: "MAE",
-        value: formatMetric(regressionResult?.metrics?.mae, hasApiRegression ? "--" : MODEL_METRICS.mae.toFixed(2)),
+        value: formatMetric(regressionResult?.metrics?.mae, "--"),
         unit: "元/㎡",
         desc: "平均绝对误差",
       },
       {
         label: "RMSE",
-        value: formatMetric(regressionResult?.metrics?.rmse, hasApiRegression ? "--" : MODEL_METRICS.rmse.toFixed(2)),
+        value: formatMetric(regressionResult?.metrics?.rmse, "--"),
         unit: "元/㎡",
         desc: "均方根误差",
       },
       {
         label: "R²",
-        value: formatMetric(regressionResult?.metrics?.r2, hasApiRegression ? "--" : MODEL_METRICS.r2.toFixed(4)),
+        value: formatMetric(regressionResult?.metrics?.r2, "--"),
         unit: "",
         desc: "决定系数",
       },
@@ -98,12 +96,12 @@ export function AnalysisPage() {
         label: "MAPE",
         value: regressionResult?.metrics?.mape !== undefined
           ? `${formatMetric(regressionResult.metrics.mape, "--")}%`
-          : hasApiRegression ? "--" : `${MODEL_METRICS.mape}%`,
+          : "--",
         unit: "",
         desc: "平均绝对百分误差",
       },
     ],
-    [regressionResult, hasApiRegression]
+    [regressionResult]
   );
 
   const featureImportance = useMemo(
@@ -145,7 +143,7 @@ export function AnalysisPage() {
         severity: item.severity,
       }));
     }
-    return ANOMALIES;
+    return [];
   }, [anomalyResult]);
 
   const modelComparisonRows = useMemo(() => {
@@ -173,7 +171,7 @@ export function AnalysisPage() {
         status: item.status ?? "ok",
       }));
     }
-    return COMPARE_MODELS.map((item, index) => ({ ...item, isBest: index === 0, status: "mock" }));
+    return [];
   }, [results, regressionResult]);
 
   const reportReference = useMemo(() => {
@@ -201,8 +199,8 @@ export function AnalysisPage() {
     if (!job) {
       return [
         {
-          id: "mock",
-          name: apiError ? "示例分析指标" : "暂无后端分析任务",
+          id: "empty",
+          name: apiError ? "分析接口异常" : "暂无后端分析任务",
           status: apiError ? "warn" : "pending",
           time: apiError ?? "点击训练后生成真实任务",
         },
@@ -263,7 +261,7 @@ export function AnalysisPage() {
   };
 
   const status = training || loading ? "running" : apiError ? "warn" : job?.status ?? "info";
-  const statusLabel = training ? "任务运行中" : apiError ? "接口降级" : regressionResult?.model_name ?? "示例指标";
+  const statusLabel = training ? "任务运行中" : apiError ? "接口异常" : regressionResult?.model_name ?? "暂无真实结果";
 
   return (
     <div className="flex flex-col gap-5">
@@ -334,10 +332,10 @@ export function AnalysisPage() {
 
             <TabsContent value="eda">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                <SectionCard title="特征重要性 Top 10" subtitle={regressionResult?.summary ?? "Ridge 基线特征权重"}>
+                <SectionCard title="特征重要性 Top 10" subtitle={regressionResult?.summary ?? "暂无真实回归结果"}>
                   <FeatureImportance data={featureImportance} />
                 </SectionCard>
-                <SectionCard title="区县价格箱线图" subtitle={edaResult?.summary ?? "各区分位数分布"}>
+                <SectionCard title="区县价格箱线图" subtitle={edaResult?.summary ?? "暂无真实 EDA 结果"}>
                   <DistrictBoxPlot source={districtBoxData} />
                 </SectionCard>
               </div>
@@ -350,13 +348,13 @@ export function AnalysisPage() {
             </TabsContent>
 
             <TabsContent value="cluster">
-              <SectionCard title="KMeans 价值分层" subtitle={clusterResult?.summary ?? "按单价、面积和房龄识别价值类型"}>
+              <SectionCard title="KMeans 价值分层" subtitle={clusterResult?.summary ?? "暂无真实聚类结果"}>
                 <KMeansScatter data={clusterPoints} />
               </SectionCard>
             </TabsContent>
 
             <TabsContent value="anomaly">
-              <SectionCard title="挂牌价异常检测" subtitle={anomalyResult?.summary ?? "偏离区县基准的样本"}>
+              <SectionCard title="挂牌价异常检测" subtitle={anomalyResult?.summary ?? "暂无真实异常检测结果"}>
                 <div className="flex items-center gap-2 mb-3 p-3 rounded-lg" style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}>
                   <AlertTriangle size={14} style={{ color: "#F59E0B" }} />
                   <span style={{ fontSize: 12, color: "#92400E" }}>检测到 {anomalyRows.length} 条需复核样本</span>
@@ -373,6 +371,13 @@ export function AnalysisPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
+                    {anomalyRows.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={6} style={{ textAlign: "center", color: "#9CA3AF", fontSize: 13, padding: 24 }}>
+                          暂无真实异常检测样本。
+                        </TableCell>
+                      </TableRow>
+                    )}
                     {anomalyRows.map(a => (
                       <TableRow key={a.id} style={{ fontSize: 13 }}>
                         <TableCell style={{ fontWeight: 500 }}>{a.listing}</TableCell>
@@ -405,6 +410,13 @@ export function AnalysisPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
+                    {modelComparisonRows.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={5} style={{ textAlign: "center", color: "#9CA3AF", fontSize: 13, padding: 24 }}>
+                          暂无真实模型对比结果。
+                        </TableCell>
+                      </TableRow>
+                    )}
                     {modelComparisonRows.map((m, i) => (
                       <TableRow key={`${m.model}-${i}`} style={{ background: m.isBest ? "#EFF6FF" : undefined }}>
                         <TableCell style={{ fontWeight: m.isBest ? 700 : 400, color: m.isBest ? "#163A70" : "#1F2937" }}>
@@ -427,12 +439,12 @@ export function AnalysisPage() {
           <SectionCard title="模型信息">
             <div className="flex flex-col gap-3">
               {[
-                ["算法", regressionResult?.model_name ?? MODEL_METRICS.modelType],
-                ["任务ID", job ? `#${job.id}` : MODEL_METRICS.version],
-                ["有效样本", `${job?.sample_count ?? MODEL_METRICS.trainSize}`],
-                ["训练集", `${job?.train_count ?? MODEL_METRICS.trainSize}`],
-                ["测试集", `${job?.test_count ?? MODEL_METRICS.testSize}`],
-                ["上次训练", job?.finished_at ?? MODEL_METRICS.lastTrained],
+                ["算法", regressionResult?.model_name ?? "--"],
+                ["任务ID", job ? `#${job.id}` : "--"],
+                ["有效样本", `${job?.sample_count ?? "--"}`],
+                ["训练集", `${job?.train_count ?? "--"}`],
+                ["测试集", `${job?.test_count ?? "--"}`],
+                ["上次训练", job?.finished_at ?? "--"],
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between items-center gap-2 py-1" style={{ borderBottom: "1px solid #E5EAF2" }}>
                   <span style={{ fontSize: 12, color: "#9CA3AF" }}>{k}</span>

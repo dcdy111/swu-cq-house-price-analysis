@@ -1,6 +1,5 @@
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ZAxis } from "recharts";
 import { AreaPricePoint } from "../../services/api";
-import { SCATTER_DATA } from "../../mock/trend";
 
 const COLORS = ["#E67E22", "#163A70", "#1F4E8C", "#4F7DBD", "#F59E0B", "#16A34A", "#7C3AED", "#9CA3AF"];
 
@@ -17,7 +16,7 @@ export function AreaPriceScatter({ data: apiData }: AreaPriceScatterProps) {
       title: item.title,
       totalPrice: item.total_price,
     }))
-    : SCATTER_DATA;
+    : [];
   const districts = Array.from(new Set(points.map(item => item.district))).slice(0, 8);
   const byDistrict = districts.map((district, index) => ({
     name: district,

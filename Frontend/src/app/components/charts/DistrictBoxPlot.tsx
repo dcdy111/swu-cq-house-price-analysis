@@ -1,5 +1,4 @@
 import { ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { BOX_DATA } from "../../mock/model";
 
 interface DistrictBoxItem {
   district: string;
@@ -11,7 +10,7 @@ interface DistrictBoxItem {
 }
 
 // Simulate a box plot using overlapping bars
-export function DistrictBoxPlot({ source = BOX_DATA }: { source?: DistrictBoxItem[] }) {
+export function DistrictBoxPlot({ source = [] }: { source?: DistrictBoxItem[] }) {
   const data = source.map(d => ({
     name: d.district,
     min: d.min,

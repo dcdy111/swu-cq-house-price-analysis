@@ -32,11 +32,16 @@ class BaseCrawler(ABC):
             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
         )
         self.interval = interval
+        self.enabled_override: bool | None = None
 
     @property
     def is_enabled(self) -> bool:
+        if self.enabled_override is False:
+            return False
         if self.cookie_env_key:
             return bool(os.getenv(self.cookie_env_key))
+        if self.enabled_override is not None:
+            return self.enabled_override
         return self.enabled
 
     def metadata(self) -> dict:

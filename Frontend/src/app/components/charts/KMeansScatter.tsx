@@ -1,5 +1,4 @@
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { KMEANS_DATA } from "../../mock/model";
 
 const CLUSTER_COLORS = ["#4F7DBD", "#163A70", "#E67E22", "#16A34A"];
 const CLUSTER_LABELS = ["经济型", "中端", "中高端", "豪华型"];
@@ -11,7 +10,7 @@ interface KMeansPoint {
   label?: string;
 }
 
-export function KMeansScatter({ data = KMEANS_DATA }: { data?: KMeansPoint[] }) {
+export function KMeansScatter({ data = [] }: { data?: KMeansPoint[] }) {
   const clusterIds = Array.from(new Set(data.map(item => item.cluster))).sort((a, b) => a - b);
   const clusters = clusterIds.map(c => ({
     name: data.find(item => item.cluster === c)?.label ?? CLUSTER_LABELS[c] ?? `分层${c + 1}`,

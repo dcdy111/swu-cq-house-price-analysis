@@ -1,6 +1,5 @@
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 import { PriceTrendItem } from "../../services/api";
-import { TREND_DATA } from "../../mock/trend";
 
 interface PriceTrendLineProps {
   data?: PriceTrendItem[];
@@ -14,7 +13,7 @@ export function PriceTrendLine({ data: apiData }: PriceTrendLineProps) {
       volume: item.listing_count,
       newListings: item.listing_count,
     }))
-    : TREND_DATA;
+    : [];
   return (
     <ResponsiveContainer width="100%" height={200}>
       <AreaChart data={data} margin={{ left: 5, right: 10, top: 5, bottom: 5 }}>

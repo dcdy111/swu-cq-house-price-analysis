@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Play, RotateCcw, Terminal, Activity, CheckCircle, AlertCircle, Clock, Database, RefreshCw, FileText } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -10,7 +10,6 @@ import { SectionCard } from "../common/SectionCard";
 import { StatusTag } from "../common/StatusTag";
 import { KpiCard } from "../common/KpiCard";
 import { api, CrawlLog, CrawlSource, CrawlTask, CrawlTaskList } from "../../services/api";
-import { CRAWL_TASKS, LOG_ENTRIES } from "../../mock/crawlTasks";
 import { toast } from "sonner";
 
 const LOG_COLOR: Record<string, string> = {
@@ -31,36 +30,9 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   failed: "失败",
   partial_failed: "部分失败",
   pending: "待运行",
+  canceled: "已取消",
+  cancel_requested: "取消中",
 };
-
-const MOCK_SOURCES: CrawlSource[] = [
-  {
-    key: "fang",
-    name: "房天下",
-    enabled: true,
-    description: "重庆房天下二手房列表页，当前作为默认稳定采集源。",
-    districts: ["两江新区", "渝中", "南岸", "沙坪坝", "九龙坡", "大渡口", "北碚", "巴南", "涪陵", "江津", "铜梁", "永川", "璧山", "合川"],
-  },
-  {
-    key: "anjuke_mobile",
-    name: "安居客移动端",
-    enabled: true,
-    description: "移动端列表页，适合小批量补采，失败会进入任务日志。",
-    districts: ["渝北", "南岸", "沙坪坝", "九龙坡", "江北", "渝中", "巴南", "北碚", "大渡口", "璧山", "永川", "合川"],
-  },
-  {
-    key: "lianjia",
-    name: "链家移动端",
-    enabled: false,
-    description: "需配置 Cookie 后启用，适合作为高质量实验源。",
-    districts: ["江北", "渝北", "南岸", "巴南", "沙坪坝", "九龙坡", "渝中", "大渡口", "北碚"],
-  },
-];
-
-function formatDateTime(date = new Date()) {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
 
 function normalizeDistrictName(name: string) {
   if (name === "两江新区") return name;
@@ -68,66 +40,6 @@ function normalizeDistrictName(name: string) {
     .replace(/土家族苗族自治县|苗族土家族自治县|土家族自治县/g, "")
     .replace(/[区县]$/g, "")
     .trim();
-}
-
-function mockTaskToApiTask(item: typeof CRAWL_TASKS[number], index: number): CrawlTask {
-  const totalPages = Math.max(1, Math.round(item.total / 30));
-  const donePages = Math.round(totalPages * item.progress / 100);
-  return {
-    id: index + 1,
-    name: item.name,
-    source: item.source === "链家" ? "lianjia" : item.source === "安居客" ? "anjuke_mobile" : "fang",
-    mode: item.type === "增量" ? "incremental" : "manual",
-    districts: item.range === "重庆全市" ? ["全市"] : item.range.split(",").map(normalizeDistrictName),
-    max_pages: Math.max(1, Math.round(totalPages / Math.max(1, item.range.split(",").length))),
-    max_workers: Math.min(5, Math.max(1, item.concurrency)),
-    status: item.status === "paused" ? "pending" : item.status,
-    total_pages: totalPages,
-    success_pages: item.status === "failed" ? Math.max(0, donePages - 3) : donePages,
-    failed_pages: item.status === "failed" ? 3 : 0,
-    total_found: item.crawled,
-    inserted_count: Math.round(item.crawled * 0.68),
-    updated_count: Math.round(item.crawled * 0.2),
-    unchanged_count: Math.round(item.crawled * 0.12),
-    snapshot_count: Math.round(item.crawled * 0.08),
-    progress: item.progress,
-    error_message: item.status === "failed" ? "部分页面请求超时，已写入失败日志" : undefined,
-    started_at: item.startTime,
-    finished_at: item.endTime,
-    created_at: item.startTime,
-    updated_at: item.endTime || item.startTime,
-  };
-}
-
-function mockLogToApiLog(item: typeof LOG_ENTRIES[number]): CrawlLog {
-  return {
-    id: item.id,
-    task_id: Number(item.taskId.replace("T", "")),
-    level: item.level,
-    message: item.message,
-    url: item.url,
-    created_at: `2026-06-09 ${item.time}`,
-  };
-}
-
-function buildTaskList(items: CrawlTask[]): CrawlTaskList {
-  const summary = items.reduce(
-    (acc, task) => {
-      acc.running += task.status === "running" ? 1 : 0;
-      acc.success += task.status === "success" ? 1 : 0;
-      acc.failed += task.status === "failed" ? 1 : 0;
-      acc.partial_failed += task.status === "partial_failed" ? 1 : 0;
-      acc.pending += task.status === "pending" ? 1 : 0;
-      acc.total_found += task.total_found;
-      return acc;
-    },
-    { running: 0, success: 0, failed: 0, partial_failed: 0, pending: 0, total_found: 0 }
-  );
-  return {
-    items,
-    pagination: { page: 1, page_size: 20, total: items.length, pages: 1 },
-    summary,
-  };
 }
 
 export function CrawlTasksPage() {
@@ -139,10 +51,8 @@ export function CrawlTasksPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [runningTaskId, setRunningTaskId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
-  const [usingMock, setUsingMock] = useState(false);
-  const mockWarnedRef = useRef(false);
-  const [localTasks, setLocalTasks] = useState<CrawlTask[]>(() => CRAWL_TASKS.map(mockTaskToApiTask));
-  const [localLogs, setLocalLogs] = useState<CrawlLog[]>(() => LOG_ENTRIES.map(mockLogToApiLog));
+  const [cancelingTaskId, setCancelingTaskId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState("房天下小规模试采集");
   const [source, setSource] = useState("fang");
@@ -155,26 +65,22 @@ export function CrawlTasksPage() {
   const selectedSource = sources.find(item => item.key === source);
   const filteredLogs = logs.filter(log => (logFilter === "ALL" || log.level === logFilter) && (!logTaskFilter || log.task_id === logTaskFilter));
 
-  const applyMockData = (message?: string) => {
-    setUsingMock(true);
-    setSources(MOCK_SOURCES);
-    setTaskList(buildTaskList(localTasks));
-    setLogs(localLogs);
-    if (message && !mockWarnedRef.current) {
-      toast.warning(`${message}，已切换前端演示任务`);
-      mockWarnedRef.current = true;
-    }
-  };
-
   const refresh = () => {
     Promise.all([api.getCrawlSources(), api.getCrawlTasks(), api.getCrawlLogs(120)])
       .then(([sourceData, taskData, logData]) => {
-        setUsingMock(false);
         setSources(sourceData.items);
         setTaskList(taskData);
         setLogs(logData.items);
+        setError(null);
       })
-      .catch(error => applyMockData(error.message || "采集任务数据加载失败"));
+      .catch(error => {
+        const message = error instanceof Error ? error.message : "采集任务数据加载失败";
+        setSources([]);
+        setTaskList(null);
+        setLogs([]);
+        setError(message);
+        toast.error(message);
+      });
   };
 
   useEffect(() => {
@@ -189,18 +95,10 @@ export function CrawlTasksPage() {
     refresh();
   }, []);
 
-  useEffect(() => {
-    if (usingMock) {
-      setTaskList(buildTaskList(localTasks));
-      setLogs(localLogs);
-    }
-  }, [localLogs, localTasks, usingMock]);
-
   const createTask = async () => {
     setCreating(true);
     const districtList = districts.split(",").map(item => normalizeDistrictName(item.trim())).filter(Boolean);
     try {
-      if (usingMock) throw new Error("前端演示模式");
       await api.createCrawlTask({
         name,
         source,
@@ -214,56 +112,8 @@ export function CrawlTasksPage() {
       setDialogOpen(false);
       refresh();
     } catch (error) {
-      if (!usingMock && error instanceof Error && error.message !== "前端演示模式") {
-        toast.error(error.message || "任务创建失败");
-        return;
-      }
-      const now = formatDateTime();
-      const totalPages = Math.max(1, districtList.length) * (Number(maxPages) || 1);
-      const found = runNow ? totalPages * 30 : 0;
-      const newTask: CrawlTask = {
-        id: Math.max(0, ...localTasks.map(item => item.id)) + 1,
-        name: name.trim() || `${sourceNameMap[source] || source}采集任务`,
-        source,
-        mode: "manual",
-        districts: districtList.length ? districtList : ["渝中"],
-        max_pages: Number(maxPages) || 1,
-        max_workers: Number(maxWorkers) || 2,
-        status: runNow ? "success" : "pending",
-        total_pages: totalPages,
-        success_pages: runNow ? totalPages : 0,
-        failed_pages: 0,
-        total_found: found,
-        inserted_count: Math.round(found * 0.72),
-        updated_count: Math.round(found * 0.18),
-        unchanged_count: Math.round(found * 0.1),
-        snapshot_count: Math.round(found * 0.08),
-        progress: runNow ? 100 : 0,
-        started_at: runNow ? now : undefined,
-        finished_at: runNow ? now : undefined,
-        created_at: now,
-        updated_at: now,
-      };
-      const nextTasks = [newTask, ...localTasks];
-      const nextLogs: CrawlLog[] = [
-        {
-          id: Math.max(0, ...localLogs.map(item => item.id)) + 1,
-          task_id: newTask.id,
-          level: "INFO",
-          message: runNow ? `演示任务执行完成，共解析 ${found} 条房源` : "演示任务已创建，等待执行",
-          district: newTask.districts.join(","),
-          created_at: now,
-        },
-        ...localLogs,
-      ];
-      setUsingMock(true);
-      setSources(MOCK_SOURCES);
-      setLocalTasks(nextTasks);
-      setLocalLogs(nextLogs);
-      setTaskList(buildTaskList(nextTasks));
-      setLogs(nextLogs);
-      setDialogOpen(false);
-      toast.success(runNow ? "演示任务已创建并执行" : "演示任务已创建");
+      const message = error instanceof Error ? error.message : "任务创建失败";
+      toast.error(message);
     } finally {
       setCreating(false);
     }
@@ -272,54 +122,33 @@ export function CrawlTasksPage() {
   const runTask = async (task: CrawlTask) => {
     setRunningTaskId(task.id);
     try {
-      if (usingMock) throw new Error("前端演示模式");
       await api.runCrawlTask(task.id);
       toast.success("任务执行完成");
       refresh();
     } catch (error) {
-      if (!usingMock && error instanceof Error && error.message !== "前端演示模式") {
-        toast.error(error.message || "任务执行失败");
-        return;
-      }
-      const now = formatDateTime();
-      const found = Math.max(30, task.total_pages * 30);
-      const nextTasks = localTasks.map(item => item.id === task.id ? {
-        ...item,
-        status: "success",
-        progress: 100,
-        success_pages: item.total_pages,
-        failed_pages: 0,
-        total_found: found,
-        inserted_count: Math.round(found * 0.7),
-        updated_count: Math.round(found * 0.2),
-        unchanged_count: Math.round(found * 0.1),
-        snapshot_count: Math.round(found * 0.08),
-        started_at: now,
-        finished_at: now,
-        updated_at: now,
-        error_message: undefined,
-      } : item);
-      const nextLogs: CrawlLog[] = [
-        {
-          id: Math.max(0, ...localLogs.map(item => item.id)) + 1,
-          task_id: task.id,
-          level: "INFO",
-          message: `演示任务重新执行完成，共解析 ${found} 条房源`,
-          district: task.districts.join(","),
-          created_at: now,
-        },
-        ...localLogs,
-      ];
-      setLocalTasks(nextTasks);
-      setLocalLogs(nextLogs);
-      toast.success("演示任务执行完成");
+      const message = error instanceof Error ? error.message : "任务执行失败";
+      toast.error(message);
     } finally {
       setRunningTaskId(null);
     }
   };
 
+  const cancelTask = async (task: CrawlTask) => {
+    setCancelingTaskId(task.id);
+    try {
+      await api.cancelCrawlTask(task.id);
+      toast.success("任务取消请求已提交");
+      refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "任务取消失败";
+      toast.error(message);
+    } finally {
+      setCancelingTaskId(null);
+    }
+  };
+
   const tasks = taskList?.items ?? [];
-  const summary = taskList?.summary ?? { running: 0, success: 0, failed: 0, partial_failed: 0, pending: 0, total_found: 0 };
+  const summary = taskList?.summary ?? { running: 0, success: 0, failed: 0, partial_failed: 0, pending: 0, canceled: 0, cancel_requested: 0, total_found: 0 };
 
   return (
     <div className="flex flex-col gap-5">
@@ -327,7 +156,7 @@ export function CrawlTasksPage() {
         <div>
           <h2 style={{ color: "#163A70", fontSize: 18, fontWeight: 700 }}>采集任务管理</h2>
           <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 2 }}>
-            多源采集 · 任务状态 · 失败日志可追踪 · {usingMock ? "前端演示数据" : "后端任务数据"}
+            多源采集 · 任务状态 · 失败日志可追踪 · 后端任务数据
           </p>
         </div>
         <div className="flex gap-2">
@@ -406,6 +235,12 @@ export function CrawlTasksPage() {
         </div>
       </div>
 
+      {error && (
+        <div className="rounded-lg px-4 py-3" style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B", fontSize: 13 }}>
+          采集任务接口加载失败：{error}。当前页面不会生成本地演示任务，请恢复后端后刷新。
+        </div>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         {[
           { title: "运行中", value: String(summary.running), icon: <Activity size={16} style={{ color: "#1F4E8C" }} /> },
@@ -420,6 +255,11 @@ export function CrawlTasksPage() {
 
       <SectionCard title="数据源配置" subtitle="默认优先使用可直接解析的来源">
         <div className="grid md:grid-cols-3 gap-3">
+          {sources.length === 0 && (
+            <div style={{ fontSize: 13, color: "#9CA3AF", padding: 24 }}>
+              暂无后端数据源配置。请确认 `/api/crawl/sources` 可访问。
+            </div>
+          )}
           {sources.map(item => (
             <div key={item.key} className="rounded-lg p-3" style={{ border: "1px solid #E5EAF2" }}>
               <div className="flex items-center justify-between mb-2">
@@ -468,9 +308,20 @@ export function CrawlTasksPage() {
                   </div>
                 </div>
                 <div className="flex gap-1.5 flex-shrink-0">
-                  {task.status !== "running" && (
+                  {task.status !== "running" && task.status !== "cancel_requested" && (
                     <Button variant="outline" size="sm" disabled={runningTaskId === task.id} onClick={() => runTask(task)}>
                       {runningTaskId === task.id ? <RotateCcw size={12} /> : <Play size={12} />}
+                    </Button>
+                  )}
+                  {["pending", "running", "cancel_requested"].includes(task.status) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={cancelingTaskId === task.id || task.status === "cancel_requested"}
+                      onClick={() => cancelTask(task)}
+                      title="取消任务"
+                    >
+                      {cancelingTaskId === task.id ? <RotateCcw size={12} /> : "停"}
                     </Button>
                   )}
                   <Button

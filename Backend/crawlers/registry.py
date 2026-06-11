@@ -5,6 +5,7 @@ from flask import current_app
 from Backend.crawlers.anjuke_mobile import AnjukeMobileCrawler
 from Backend.crawlers.fang import FangCrawler
 from Backend.crawlers.lianjia import LianjiaCrawler
+from Backend.services.settings_service import SettingsService
 
 
 CRAWLER_CLASSES = {
@@ -18,11 +19,17 @@ def get_crawler(source: str):
     crawler_cls = CRAWLER_CLASSES.get(source)
     if crawler_cls is None:
         return None
-    return crawler_cls(
-        timeout=current_app.config["CRAWL_REQUEST_TIMEOUT"],
+    crawler_settings = SettingsService.effective_settings(include_secret=False).get("crawler", {})
+    crawler = crawler_cls(
+        timeout=int(crawler_settings.get("request_timeout") or current_app.config["CRAWL_REQUEST_TIMEOUT"]),
         user_agent=current_app.config["CRAWL_USER_AGENT"],
-        interval=(current_app.config["CRAWL_INTERVAL_MIN"], current_app.config["CRAWL_INTERVAL_MAX"]),
+        interval=(
+            float(crawler_settings.get("interval_min") or current_app.config["CRAWL_INTERVAL_MIN"]),
+            float(crawler_settings.get("interval_max") or current_app.config["CRAWL_INTERVAL_MAX"]),
+        ),
     )
+    crawler.enabled_override = SettingsService.source_enabled(source, default=crawler.enabled)
+    return crawler
 
 
 def list_sources() -> list[dict]:

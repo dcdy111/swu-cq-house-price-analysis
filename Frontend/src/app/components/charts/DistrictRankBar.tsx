@@ -1,16 +1,14 @@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { DistrictPriceItem } from "../../services/api";
-import { TOP_DISTRICTS } from "../../mock/districts";
 
 interface DistrictRankBarProps {
   data?: DistrictPriceItem[];
 }
 
 export function DistrictRankBar({ data: apiData }: DistrictRankBarProps) {
-  const data = (apiData && apiData.length > 0
+  const data = apiData && apiData.length > 0
     ? apiData.slice(0, 8).map(d => ({ name: d.district.replace("区", ""), value: Math.round(d.avg_unit_price) }))
-    : TOP_DISTRICTS.slice(0, 8).map(d => ({ name: d.name.replace("区", ""), value: d.avgPrice }))
-  );
+    : [];
   const maxValue = Math.max(10000, ...data.map(item => item.value));
   return (
     <ResponsiveContainer width="100%" height={220}>

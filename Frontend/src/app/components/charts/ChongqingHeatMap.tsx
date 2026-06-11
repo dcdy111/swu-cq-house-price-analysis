@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 import type { EChartsOption } from "echarts";
-import { DISTRICTS, District } from "../../mock/districts";
 
 export type ChongqingMapMetric = "avgPrice" | "count" | "quality";
+
+export interface District {
+  name: string;
+  avgPrice: number;
+  count: number;
+  change: number;
+  quality: number;
+}
 
 interface ChongqingHeatMapProps {
   metric?: ChongqingMapMetric;
@@ -41,7 +48,7 @@ export function ChongqingHeatMap({
   const chartRef = useRef<echarts.ECharts | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
-  const districts = useMemo(() => data ?? DISTRICTS, [data]);
+  const districts = useMemo(() => data ?? [], [data]);
 
   const districtByName = useMemo(
     () => new Map(districts.map(item => [item.name, item])),

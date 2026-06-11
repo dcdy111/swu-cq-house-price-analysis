@@ -6,15 +6,33 @@ import { Label } from "../ui/label";
 import { Checkbox } from "../ui/checkbox";
 import { ChongqingSkyline } from "../common/ChongqingSkyline";
 import { Eye, EyeOff, Lock, User } from "lucide-react";
+import { api, saveAuth } from "../../services/api";
+import { toast } from "sonner";
 
-export function LoginPage() {
+export function LoginPage({ onLogin }: { onLogin: () => void }) {
   const navigate = useNavigate();
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("swu@2026");
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
+    if (!username.trim() || !password) {
+      toast.error("请输入用户名和密码");
+      return;
+    }
     setLoading(true);
-    setTimeout(() => navigate("/dashboard"), 800);
+    try {
+      const result = await api.login({ username: username.trim(), password });
+      saveAuth(result);
+      onLogin();
+      navigate("/dashboard");
+      toast.success("登录成功");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "登录失败");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -61,7 +79,7 @@ export function LoginPage() {
               <Label style={{ fontSize: 13 }}>用户名</Label>
               <div className="relative">
                 <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#9CA3AF" }} />
-                <Input defaultValue="admin" className="pl-9" placeholder="输入用户名" />
+                <Input value={username} onChange={event => setUsername(event.target.value)} className="pl-9" placeholder="输入用户名" />
               </div>
             </div>
 
@@ -71,7 +89,11 @@ export function LoginPage() {
                 <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#9CA3AF" }} />
                 <Input
                   type={showPwd ? "text" : "password"}
-                  defaultValue="swu@2026"
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === "Enter") void handleLogin();
+                  }}
                   className="pl-9 pr-10"
                   placeholder="输入密码"
                 />

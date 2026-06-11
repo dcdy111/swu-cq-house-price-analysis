@@ -108,7 +108,53 @@ export interface CrawlTaskList {
     failed: number;
     partial_failed: number;
     pending: number;
+    canceled: number;
+    cancel_requested: number;
     total_found: number;
+  };
+}
+
+export interface AuthUser {
+  username: string;
+  role: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  user: AuthUser;
+}
+
+export interface SystemSettings {
+  crawler: {
+    max_workers: number;
+    request_timeout: number;
+    interval_min: number;
+    interval_max: number;
+    sources: Record<string, { enabled: boolean }>;
+  };
+  scheduler: {
+    enabled: boolean;
+    timezone: string;
+    quality_report_job_enabled: boolean;
+    quality_report_interval_hours: number;
+    incremental_crawl_job_enabled: boolean;
+    incremental_crawl_interval_hours: number;
+    incremental_crawl_source: string;
+    incremental_crawl_districts: string;
+    incremental_crawl_max_pages: number;
+    incremental_crawl_max_workers: number;
+  };
+  deepseek: {
+    enabled: boolean;
+    base_url: string;
+    model: string;
+    timeout: number;
+    api_key?: string;
+    clear_api_key?: boolean;
+    api_key_configured?: boolean;
+    api_key_masked?: string | null;
   };
 }
 
@@ -384,6 +430,36 @@ export interface LayoutDistributionResult {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+const TOKEN_KEY = "swu-auth-token";
+const USER_KEY = "swu-auth-user";
+
+export function getAuthToken() {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+
+export function hasAuthToken() {
+  return Boolean(getAuthToken());
+}
+
+export function clearAuthToken() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
+
+export function saveAuth(payload: LoginResponse) {
+  localStorage.setItem(TOKEN_KEY, payload.token);
+  localStorage.setItem(USER_KEY, JSON.stringify(payload.user));
+}
+
+export function getStoredUser(): AuthUser | null {
+  const raw = localStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AuthUser;
+  } catch {
+    return null;
+  }
+}
 
 function toQuery(params: Record<string, string | number | undefined>) {
   const query = new URLSearchParams();
@@ -397,8 +473,13 @@ function toQuery(params: Record<string, string | number | undefined>) {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getAuthToken();
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options?.headers || {}),
+    },
     ...options,
   });
   const payload = (await response.json()) as ApiEnvelope<T>;
@@ -409,6 +490,32 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  login(payload: { username: string; password: string }) {
+    return request<LoginResponse>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  me() {
+    return request<{ user: AuthUser }>("/api/auth/me");
+  },
+  logout() {
+    return request<{ status: string }>("/api/auth/logout", { method: "POST" });
+  },
+  getSettings() {
+    return request<SystemSettings>("/api/settings");
+  },
+  updateSettings(payload: Partial<SystemSettings>) {
+    return request<SystemSettings>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  testDeepSeek() {
+    return request<{ ok: boolean; message: string; base_url?: string; model?: string }>("/api/settings/test-deepseek", {
+      method: "POST",
+    });
+  },
   getOverview() {
     return request<DashboardOverview>("/api/overview");
   },
@@ -459,6 +566,9 @@ export const api = {
   runCrawlTask(taskId: number) {
     return request<CrawlTask>(`/api/crawl/tasks/${taskId}/run`, { method: "POST" });
   },
+  cancelCrawlTask(taskId: number) {
+    return request<CrawlTask>(`/api/crawl/tasks/${taskId}/cancel`, { method: "POST" });
+  },
   getCrawlLogs(limit = 100) {
     return request<{ items: CrawlLog[] }>(`/api/crawl/logs?limit=${limit}`);
   },
@@ -489,5 +599,9 @@ export const api = {
 };
 
 export function listingsExportUrl(params: Record<string, string | number | undefined>) {
-  return `${API_BASE}/api/listings/export${toQuery(params)}`;
+  return `${API_BASE}/api/listings/export${toQuery({ ...params, access_token: getAuthToken() })}`;
+}
+
+export function reportPdfUrl(reportId: number) {
+  return `${API_BASE}/api/reports/${reportId}/export.pdf${toQuery({ access_token: getAuthToken() })}`;
 }

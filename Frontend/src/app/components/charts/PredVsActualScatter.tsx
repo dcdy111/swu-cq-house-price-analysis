@@ -1,12 +1,11 @@
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
-import { PRED_VS_ACTUAL } from "../../mock/model";
 
 interface PredictionPoint {
   actual: number;
   predicted: number;
 }
 
-export function PredVsActualScatter({ data = PRED_VS_ACTUAL }: { data?: PredictionPoint[] }) {
+export function PredVsActualScatter({ data = [] }: { data?: PredictionPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={260}>
       <ScatterChart margin={{ left: 5, right: 10, top: 10, bottom: 5 }}>

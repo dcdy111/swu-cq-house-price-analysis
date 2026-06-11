@@ -6,6 +6,8 @@ from typing import Any
 import requests
 from flask import current_app
 
+from Backend.services.settings_service import SettingsService
+
 
 SYSTEM_PROMPT = """你是“重庆二手房挂牌价数据分析助手”。
 你只能基于系统工具返回的数据回答问题。
@@ -18,15 +20,17 @@ SYSTEM_PROMPT = """你是“重庆二手房挂牌价数据分析助手”。
 class DeepSeekClient:
     @staticmethod
     def is_enabled() -> bool:
-        return bool(current_app.config.get("DEEPSEEK_ENABLED")) and bool(current_app.config.get("DEEPSEEK_API_KEY"))
+        settings = SettingsService.deepseek_settings()
+        return bool(settings.get("enabled")) and bool(settings.get("api_key"))
 
     @staticmethod
     def generate_answer(question: str, evidence: dict[str, Any], fallback_answer: str) -> tuple[str, str]:
         if not DeepSeekClient.is_enabled():
             return fallback_answer, "deepseek-disabled-fallback"
 
+        settings = SettingsService.deepseek_settings()
         payload = {
-            "model": current_app.config["DEEPSEEK_MODEL"],
+            "model": settings.get("model") or current_app.config["DEEPSEEK_MODEL"],
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
@@ -42,9 +46,9 @@ class DeepSeekClient:
             "stream": False,
             "temperature": 0.2,
         }
-        url = current_app.config["DEEPSEEK_BASE_URL"].rstrip("/") + "/chat/completions"
+        url = str(settings.get("base_url") or current_app.config["DEEPSEEK_BASE_URL"]).rstrip("/") + "/chat/completions"
         headers = {
-            "Authorization": f"Bearer {current_app.config['DEEPSEEK_API_KEY']}",
+            "Authorization": f"Bearer {settings.get('api_key') or current_app.config['DEEPSEEK_API_KEY']}",
             "Content-Type": "application/json",
         }
         try:
@@ -52,13 +56,13 @@ class DeepSeekClient:
                 url,
                 headers=headers,
                 json=payload,
-                timeout=int(current_app.config["DEEPSEEK_TIMEOUT"]),
+                timeout=int(settings.get("timeout") or current_app.config["DEEPSEEK_TIMEOUT"]),
             )
             response.raise_for_status()
             data = response.json()
             content = data["choices"][0]["message"]["content"]
             if not content:
                 return fallback_answer, "deepseek-empty-fallback"
-            return content, str(current_app.config["DEEPSEEK_MODEL"])
+            return content, str(settings.get("model") or current_app.config["DEEPSEEK_MODEL"])
         except Exception as exc:
             return fallback_answer + f"\n\n> DeepSeek 调用失败，已使用本地工具证据回答：{exc}", "deepseek-error-fallback"

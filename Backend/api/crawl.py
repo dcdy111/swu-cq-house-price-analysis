@@ -49,8 +49,16 @@ def run_task(task_id: int):
         return api_error(str(exc), status_code=400)
 
 
+@bp.post("/tasks/<int:task_id>/cancel")
+def cancel_task(task_id: int):
+    try:
+        task = CrawlService.cancel_task(task_id)
+        return api_success(task.to_dict(include_logs=True))
+    except ValueError as exc:
+        return api_error(str(exc), status_code=400)
+
+
 @bp.get("/logs")
 def logs():
     limit = int(request.args.get("limit", 100))
     return api_success({"items": CrawlService.recent_logs(limit)})
-
