@@ -108,9 +108,15 @@ class AnalysisService:
             job.updated_at = job.started_at
             records = AnalysisService._load_records(max_samples=max_samples)
             job.sample_count = len(records)
+            sampling_evidence = AnalysisService._sampling_evidence(records, requested_max_samples=max_samples)
 
             result_payloads = AnalysisService._run(job_type, records)
             for payload_item in result_payloads:
+                metrics = dict(payload_item.get("metrics") or {})
+                metrics.setdefault("sampling_district_count", sampling_evidence["district_count"])
+                metrics.setdefault("sampling_source_count", sampling_evidence["source_count"])
+                evidence = dict(payload_item.get("evidence") or {})
+                evidence["sampling"] = sampling_evidence
                 result = ModelResult(
                     job_id=job.id,
                     result_type=payload_item["result_type"],
@@ -118,9 +124,9 @@ class AnalysisService:
                     summary=payload_item["summary"],
                 )
                 result.set_payloads(
-                    metrics=payload_item.get("metrics"),
+                    metrics=metrics,
                     artifacts=payload_item.get("artifacts"),
-                    evidence=payload_item.get("evidence"),
+                    evidence=evidence,
                 )
                 db.session.add(result)
 
@@ -179,13 +185,76 @@ class AnalysisService:
         )
 
     @staticmethod
+    def latest_results_by_type() -> dict:
+        ordered_types = ["eda", "regression", "cluster", "anomaly"]
+        latest_results: dict[str, ModelResult] = {}
+        jobs_by_type: dict[str, dict] = {}
+
+        for result_type in ordered_types:
+            result = (
+                ModelResult.query.join(AnalysisJob)
+                .filter(AnalysisJob.status == "success", ModelResult.result_type == result_type)
+                .order_by(AnalysisJob.finished_at.desc(), AnalysisJob.id.desc(), ModelResult.id.desc())
+                .first()
+            )
+            if result is None:
+                continue
+            latest_results[result_type] = result
+            jobs_by_type[result_type] = result.job.to_dict(include_results=False)
+
+        result_items: list[ModelResult] = []
+        seen_ids = set()
+        for result_type in ordered_types:
+            result = latest_results.get(result_type)
+            if result is not None and result.id not in seen_ids:
+                result_items.append(result)
+                seen_ids.add(result.id)
+
+        regression_result = latest_results.get("regression")
+        primary_job = regression_result.job if regression_result is not None else AnalysisService.latest_success_job()
+        if regression_result is not None:
+            candidates = (
+                ModelResult.query.filter_by(job_id=regression_result.job_id, result_type="regression_candidate")
+                .order_by(ModelResult.id.asc())
+                .all()
+            )
+            for candidate in candidates:
+                if candidate.id not in seen_ids:
+                    result_items.append(candidate)
+                    seen_ids.add(candidate.id)
+
+        return {
+            "job": primary_job.to_dict(include_results=False) if primary_job else None,
+            "results": [item.to_dict() for item in result_items],
+            "jobs_by_type": jobs_by_type,
+            "note": "按 result_type 读取最近成功结果；用于本地演示时避免最新单项任务覆盖其他分析页签。",
+        }
+
+    @staticmethod
     def _load_records(max_samples: int) -> list[dict]:
-        rows = (
-            Listing.query.filter(_analysis_condition())
-            .order_by(Listing.updated_at.desc(), Listing.id.desc())
-            .limit(max_samples)
+        strata = (
+            db.session.query(Listing.district, db.func.count(Listing.id))
+            .filter(_analysis_condition())
+            .group_by(Listing.district)
+            .order_by(Listing.district.asc())
             .all()
         )
+        counts = {str(district or "待复核"): int(count or 0) for district, count in strata if count}
+        allocations = AnalysisService._allocate_strata(counts, max_samples)
+        rows = []
+        for district, limit in allocations.items():
+            if limit <= 0:
+                continue
+            rows.extend(
+                Listing.query.filter(_analysis_condition(), Listing.district == district)
+                .order_by(
+                    db.func.crc32(db.func.concat(Listing.id, "-analysis-v1")).asc(),
+                    Listing.id.asc(),
+                )
+                .limit(limit)
+                .all()
+            )
+        rows.sort(key=lambda item: (normalize_district_name(item.district), item.id))
         return [
             {
                 "id": item.id,
@@ -210,6 +279,64 @@ class AnalysisService:
             }
             for item in rows
         ]
+
+    @staticmethod
+    def _allocate_strata(counts: dict[str, int], target: int) -> dict[str, int]:
+        available = {key: max(0, int(value or 0)) for key, value in counts.items() if int(value or 0) > 0}
+        total = sum(available.values())
+        target = min(max(0, int(target or 0)), total)
+        if target <= 0 or not available:
+            return {}
+
+        ordered = sorted(available, key=lambda key: (-available[key], key))
+        selected = ordered if target >= len(ordered) else ordered[:target]
+        allocation = {key: 1 for key in selected}
+        remaining = target - len(selected)
+
+        while remaining > 0:
+            capacity = {key: available[key] - allocation[key] for key in selected}
+            total_capacity = sum(max(0, value) for value in capacity.values())
+            if total_capacity <= 0:
+                break
+
+            raw = {key: remaining * max(0, capacity[key]) / total_capacity for key in selected}
+            additions = {key: min(capacity[key], int(math.floor(raw[key]))) for key in selected}
+            distributed = sum(additions.values())
+            for key, value in additions.items():
+                allocation[key] += value
+            remaining -= distributed
+            if remaining <= 0:
+                break
+
+            candidates = sorted(
+                (key for key in selected if allocation[key] < available[key]),
+                key=lambda key: (-(raw[key] - math.floor(raw[key])), -capacity[key], key),
+            )
+            if not candidates:
+                break
+            for key in candidates:
+                if remaining <= 0:
+                    break
+                allocation[key] += 1
+                remaining -= 1
+
+        return {key: allocation[key] for key in sorted(allocation)}
+
+    @staticmethod
+    def _sampling_evidence(records: list[dict], requested_max_samples: int) -> dict:
+        district_distribution = Counter(item["district"] for item in records)
+        source_distribution = Counter(item["source"] for item in records)
+        return {
+            "strategy": "district_stratified_deterministic",
+            "description": "按区县至少保留一个样本，其余名额按各区县可用样本量比例分配；区县内使用固定 CRC32 顺序抽样。",
+            "requested_max_samples": int(requested_max_samples),
+            "actual_sample_count": len(records),
+            "district_count": len(district_distribution),
+            "source_count": len(source_distribution),
+            "district_distribution": dict(sorted(district_distribution.items())),
+            "source_distribution": dict(sorted(source_distribution.items())),
+            "deterministic_seed": "analysis-v1",
+        }
 
     @staticmethod
     def _run(job_type: str, records: list[dict]) -> list[dict]:
@@ -786,6 +913,108 @@ class AnalysisService:
                 "evidence": {"features": ["挂牌单价", "面积", "房龄"]},
             }
 
+        try:
+            return AnalysisService._sklearn_cluster_result(records)
+        except Exception as exc:
+            result = AnalysisService._deterministic_cluster_result(records)
+            result["summary"] = f"{result['summary']}；sklearn KMeans 失败，已使用确定性 KMeans 兜底。"
+            result["evidence"]["fallback_reason"] = str(exc)
+            return result
+
+    @staticmethod
+    def _sklearn_cluster_result(records: list[dict]) -> dict:
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+        from sklearn.preprocessing import StandardScaler
+
+        features = [
+            [item["unit_price"], item["total_price"], item["area"], item["house_age"]]
+            for item in records
+        ]
+        scaler = StandardScaler()
+        scaled = scaler.fit_transform(features)
+        max_k = min(4, len(records) - 1)
+        min_k = 2
+        candidates = []
+        for k in range(min_k, max_k + 1):
+            model = KMeans(n_clusters=k, n_init=10, random_state=42)
+            labels = model.fit_predict(scaled)
+            score = silhouette_score(scaled, labels) if len(set(labels)) > 1 else -1
+            candidates.append((score, k, labels, model))
+        score, k, labels, model = max(candidates, key=lambda item: item[0])
+
+        grouped: dict[int, list[dict]] = defaultdict(list)
+        for item, cluster_id in zip(records, labels):
+            grouped[int(cluster_id)].append(item)
+
+        ordered_clusters = sorted(grouped.keys(), key=lambda cid: mean(item["unit_price"] for item in grouped[cid]))
+        label_map = {cluster_id: CLUSTER_LABELS[min(index, len(CLUSTER_LABELS) - 1)] for index, cluster_id in enumerate(ordered_clusters)}
+
+        profiles = []
+        for cluster_id in ordered_clusters:
+            items = grouped[cluster_id]
+            profiles.append(
+                {
+                    "cluster": cluster_id,
+                    "label": label_map[cluster_id],
+                    "count": len(items),
+                    "avg_unit_price": _round(mean(item["unit_price"] for item in items), 2),
+                    "avg_total_price": _round(mean(item["total_price"] for item in items), 2),
+                    "avg_area": _round(mean(item["area"] for item in items), 2),
+                    "avg_house_age": _round(mean(item["house_age"] for item in items), 2),
+                    "top_districts": Counter(item["district"] for item in items).most_common(3),
+                }
+            )
+
+        points = [
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "district": item["district"],
+                "unit_price": _round(item["unit_price"], 2),
+                "area": _round(item["area"], 2),
+                "house_age": _round(item["house_age"], 2),
+                "cluster": int(labels[index]),
+                "label": label_map[int(labels[index])],
+            }
+            for index, item in enumerate(records[:250])
+        ]
+
+        centers = []
+        raw_centers = scaler.inverse_transform(model.cluster_centers_)
+        for center in raw_centers:
+            centers.append(
+                {
+                    "unit_price": _round(center[0], 2),
+                    "total_price": _round(center[1], 2),
+                    "area": _round(center[2], 2),
+                    "house_age": _round(center[3], 2),
+                }
+            )
+
+        return {
+            "result_type": "cluster",
+            "model_name": "sklearn KMeans 价值分层",
+            "summary": f"按挂牌单价、总价、面积和房龄自动选择 {k} 个价值层级，轮廓系数为 {_round(score, 4)}。",
+            "metrics": {
+                "status": "ok",
+                "sample_count": len(records),
+                "cluster_count": k,
+                "silhouette_score": _round(score, 4),
+                "candidate_k": [item[1] for item in candidates],
+                "algorithm": "sklearn.cluster.KMeans",
+            },
+            "artifacts": {"clusters": profiles, "points": points, "centers": centers},
+            "evidence": {
+                "features": ["挂牌单价", "挂牌总价", "面积", "房龄"],
+                "algorithm": "sklearn.cluster.KMeans",
+                "scaler": "sklearn.preprocessing.StandardScaler",
+                "selection_rule": "在 k=2..4 中按 silhouette_score 选择最优分层数。",
+            },
+        }
+
+    @staticmethod
+    def _deterministic_cluster_result(records: list[dict]) -> dict:
         k = 4 if len(records) >= 8 else max(2, min(3, len(records)))
         assignments, centers = AnalysisService._kmeans(records, k=k)
         grouped: dict[int, list[dict]] = defaultdict(list)
@@ -846,6 +1075,104 @@ class AnalysisService:
                 "evidence": {"threshold": "区县均值偏离 30% 或全局 z-score 绝对值不低于 2.5"},
             }
 
+        try:
+            return AnalysisService._isolation_forest_anomaly_result(records)
+        except Exception as exc:
+            result = AnalysisService._rule_anomaly_result(records)
+            result["summary"] = f"{result['summary']}；IsolationForest 失败，已使用规则阈值兜底。"
+            result["evidence"]["fallback_reason"] = str(exc)
+            return result
+
+    @staticmethod
+    def _isolation_forest_anomaly_result(records: list[dict]) -> dict:
+        from sklearn.ensemble import IsolationForest
+        from sklearn.preprocessing import StandardScaler
+
+        features = [
+            [item["unit_price"], item["total_price"], item["area"], item["house_age"], item["floor_score"]]
+            for item in records
+        ]
+        scaled = StandardScaler().fit_transform(features)
+        contamination = min(0.08, max(0.02, 10 / max(len(records), 1)))
+        model = IsolationForest(n_estimators=160, contamination=contamination, random_state=42)
+        labels = model.fit_predict(scaled)
+        scores = model.decision_function(scaled)
+
+        global_mean = mean(item["unit_price"] for item in records)
+        global_std = math.sqrt(mean((item["unit_price"] - global_mean) ** 2 for item in records)) or 1.0
+        district_groups = AnalysisService._group_by(records, "district")
+        district_means = {district: mean(item["unit_price"] for item in items) for district, items in district_groups.items()}
+
+        anomalies = []
+        model_anomaly_count = 0
+        rule_anomaly_count = 0
+        for item, label, score in zip(records, labels, scores):
+            district_mean = district_means.get(item["district"], global_mean)
+            expected = 0.75 * district_mean + 0.25 * global_mean
+            deviation_rate = _safe_div(item["unit_price"] - expected, expected) * 100
+            z_score = _safe_div(item["unit_price"] - global_mean, global_std)
+            model_flag = int(label) == -1
+            rule_flag = abs(deviation_rate) >= 50 and abs(z_score) >= 2.5
+            if not model_flag and not rule_flag:
+                continue
+
+            reasons = []
+            if model_flag:
+                model_anomaly_count += 1
+                reasons.append("IsolationForest 判定为孤立样本")
+            if rule_flag:
+                rule_anomaly_count += 1
+                direction = "高于" if deviation_rate > 0 else "低于"
+                reasons.append(
+                    f"挂牌单价{direction}区县基准 {abs(deviation_rate):.1f}%，且全局 z-score={z_score:.2f}"
+                )
+            if item["area"] <= 30 or item["area"] >= 300:
+                reasons.append("面积处于极端区间")
+            anomalies.append(
+                {
+                    "id": item["id"],
+                    "title": item["title"],
+                    "district": item["district"],
+                    "actual_unit_price": _round(item["unit_price"], 2),
+                    "expected_unit_price": _round(expected, 2),
+                    "deviation_rate": _round(deviation_rate, 2),
+                    "z_score": _round(z_score, 3),
+                    "isolation_score": _round(float(score), 5),
+                    "severity": "high" if model_flag and rule_flag else "medium",
+                    "detection_flags": {"isolation_forest": model_flag, "strong_rule": rule_flag},
+                    "reason": "；".join(reasons),
+                }
+            )
+
+        anomalies.sort(key=lambda item: (item["severity"] == "high", -item["isolation_score"], abs(item["deviation_rate"])), reverse=True)
+        return {
+            "result_type": "anomaly",
+            "model_name": "IsolationForest 挂牌价异常检测",
+            "summary": f"使用 IsolationForest 与区县基准规则识别到 {len(anomalies)} 条需人工复核的挂牌价异常样本。",
+            "metrics": {
+                "status": "ok",
+                "sample_count": len(records),
+                "anomaly_count": len(anomalies),
+                "anomaly_rate": _round(_safe_div(len(anomalies), len(records)), 4),
+                "model_anomaly_count": model_anomaly_count,
+                "strong_rule_count": rule_anomaly_count,
+                "contamination": _round(contamination, 4),
+                "threshold_deviation_rate": 50,
+                "threshold_z_score": 2.5,
+                "algorithm": "sklearn.ensemble.IsolationForest",
+            },
+            "artifacts": {"items": anomalies[:100]},
+            "evidence": {
+                "features": ["挂牌单价", "挂牌总价", "面积", "房龄", "楼层等级"],
+                "algorithm": "sklearn.ensemble.IsolationForest",
+                "scaler": "sklearn.preprocessing.StandardScaler",
+                "threshold": "IsolationForest 孤立样本，或同时满足区县基准偏离 50% 与全局 z-score 绝对值不低于 2.5",
+                "note": "异常保留用于人工复核，默认不物理删除。",
+            },
+        }
+
+    @staticmethod
+    def _rule_anomaly_result(records: list[dict]) -> dict:
         global_mean = mean(item["unit_price"] for item in records)
         global_std = math.sqrt(mean((item["unit_price"] - global_mean) ** 2 for item in records)) or 1.0
         district_groups = AnalysisService._group_by(records, "district")
@@ -858,13 +1185,14 @@ class AnalysisService:
             deviation_rate = _safe_div(item["unit_price"] - expected, expected) * 100
             z_score = _safe_div(item["unit_price"] - global_mean, global_std)
             reasons = []
-            if abs(deviation_rate) >= 30:
+            if abs(deviation_rate) >= 50 and abs(z_score) >= 2.5:
                 direction = "高于" if deviation_rate > 0 else "低于"
-                reasons.append(f"挂牌单价{direction}区县基准 {abs(deviation_rate):.1f}%")
-            if abs(z_score) >= 2.5:
-                reasons.append(f"全局 z-score={z_score:.2f}")
+                reasons.append(
+                    f"挂牌单价{direction}区县基准 {abs(deviation_rate):.1f}%，且全局 z-score={z_score:.2f}"
+                )
             if item["area"] <= 30 or item["area"] >= 300:
-                reasons.append("面积处于极端区间")
+                if abs(z_score) >= 2.5:
+                    reasons.append("面积处于极端区间且挂牌单价偏离明显")
             if not reasons:
                 continue
             anomalies.append(
@@ -890,12 +1218,13 @@ class AnalysisService:
                 "status": "ok",
                 "sample_count": len(records),
                 "anomaly_count": len(anomalies),
-                "threshold_deviation_rate": 30,
+                "anomaly_rate": _round(_safe_div(len(anomalies), len(records)), 4),
+                "threshold_deviation_rate": 50,
                 "threshold_z_score": 2.5,
             },
             "artifacts": {"items": anomalies[:100]},
             "evidence": {
-                "threshold": "区县均值偏离 30% 或全局 z-score 绝对值不低于 2.5",
+                "threshold": "区县基准偏离 50% 且全局 z-score 绝对值不低于 2.5；面积极端样本还需同时满足价格偏离条件",
                 "note": "异常保留用于人工复核，默认不物理删除。",
             },
         }

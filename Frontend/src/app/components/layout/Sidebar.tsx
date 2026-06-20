@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
   LayoutDashboard, Database, Radio, BarChart2, MessageSquare,
@@ -21,7 +20,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
 
   return (
     <aside
-      className="flex flex-col h-full transition-all duration-300 relative"
+      className="hidden md:flex flex-col h-full transition-all duration-300 relative"
       style={{ width: collapsed ? 64 : 220, background: "#163A70", flexShrink: 0 }}
     >
       {/* Logo */}
@@ -68,5 +67,37 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
         {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
       </button>
     </aside>
+  );
+}
+
+export function MobileNavigation() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  return (
+    <nav
+      aria-label="移动端主导航"
+      className="fixed inset-x-0 bottom-0 z-50 flex h-16 overflow-x-auto border-t bg-white md:hidden"
+      style={{ borderColor: "#E5EAF2" }}
+    >
+      {NAV_ITEMS.map(({ path, label, icon: Icon }) => {
+        const active = location.pathname === path || (path === "/dashboard" && location.pathname === "/");
+        return (
+          <button
+            key={path}
+            onClick={() => navigate(path)}
+            className="flex min-w-[72px] flex-1 flex-col items-center justify-center gap-1 px-2"
+            style={{
+              color: active ? "#163A70" : "#6B7280",
+              borderTop: active ? "2px solid #E67E22" : "2px solid transparent",
+              background: active ? "#EFF6FF" : "#fff",
+            }}
+          >
+            <Icon size={17} />
+            <span style={{ fontSize: 10, whiteSpace: "nowrap" }}>{label}</span>
+          </button>
+        );
+      })}
+    </nav>
   );
 }

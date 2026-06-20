@@ -55,3 +55,41 @@ def test_settings_deepseek_connection_reports_disabled_state(client):
     assert response.status_code == 200
     assert payload["data"]["ok"] is False
     assert "未启用" in payload["data"]["message"]
+
+
+def test_settings_deepseek_connection_uses_real_lightweight_request(client, monkeypatch):
+    client.put(
+        "/api/settings",
+        json={
+            "deepseek": {
+                "enabled": True,
+                "model": "deepseek-chat",
+                "api_key": "sk-test-real-request",
+            }
+        },
+    )
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    def fake_post(url, headers, json, timeout):
+        captured.update({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("Backend.agent.deepseek_client.requests.post", fake_post)
+
+    response = client.post("/api/settings/test-deepseek")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["data"]["ok"] is True
+    assert payload["data"]["model"] == "deepseek-chat"
+    assert payload["data"]["response_preview"] == "OK"
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["json"]["max_tokens"] == 64
+    assert captured["headers"]["Authorization"] == "Bearer sk-test-real-request"

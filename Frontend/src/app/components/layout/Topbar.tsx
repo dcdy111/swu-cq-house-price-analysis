@@ -36,16 +36,17 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
 
   return (
     <header
-      className="flex items-center justify-between px-6 gap-4 flex-shrink-0"
+      className="flex items-center justify-between px-3 md:px-6 gap-2 md:gap-4 flex-shrink-0"
       style={{ height: 64, background: "#fff", borderBottom: "1px solid #E5EAF2" }}
     >
       {/* Left: title */}
-      <div className="flex items-center gap-3">
-        <span style={{ color: "#163A70", fontSize: 16, fontWeight: 700 }}>重庆二手房价格数据分析与智能可视化系统</span>
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="hidden sm:inline truncate" style={{ color: "#163A70", fontSize: 16, fontWeight: 700 }}>重庆二手房价格数据分析与智能可视化系统</span>
+        <span className="sm:hidden truncate" style={{ color: "#163A70", fontSize: 14, fontWeight: 700 }}>重庆房价分析</span>
       </div>
 
       {/* Right: actions */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-shrink-0 items-center gap-1 sm:gap-4">
         {/* Search */}
         <div className="relative hidden md:block">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#9CA3AF" }} />
@@ -62,7 +63,7 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
         </div>
 
         {/* Last update */}
-        <span style={{ color: "#9CA3AF", fontSize: 12 }}>
+        <span className="hidden lg:inline" style={{ color: "#9CA3AF", fontSize: 12 }}>
           数据更新: {latestUpdatedAt?.slice(0, 16) ?? "暂无"}
         </span>
 
@@ -87,7 +88,7 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
         </DropdownMenu>
 
         {/* System status */}
-        <div className="flex items-center gap-1.5">
+        <div className="hidden sm:flex items-center gap-1.5">
           <Circle size={8} fill="#16A34A" stroke="none" />
           <span style={{ color: "#16A34A", fontSize: 12 }}>系统运行中</span>
         </div>
@@ -99,7 +100,7 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
               <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: "#163A70" }}>
                 <User size={12} style={{ color: "#fff" }} />
               </div>
-              <div className="text-left">
+              <div className="hidden sm:block text-left">
                 <div style={{ fontSize: 12, fontWeight: 600, color: "#1F2937", lineHeight: 1.2 }}>{user?.username ?? "admin"}</div>
                 <div style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.2 }}>研究员</div>
               </div>

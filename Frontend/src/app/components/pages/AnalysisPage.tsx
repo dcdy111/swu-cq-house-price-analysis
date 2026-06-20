@@ -50,7 +50,12 @@ export function AnalysisPage() {
   const loadLatest = async () => {
     setLoading(true);
     try {
-      const latest = await api.getLatestAnalysisJob();
+      let latest;
+      try {
+        latest = await api.getLatestAnalysisResultsByType();
+      } catch {
+        latest = await api.getLatestAnalysisJob();
+      }
       setJob(latest.job);
       setResults(latest.results ?? []);
       setApiError(null);
@@ -125,6 +130,11 @@ export function AnalysisPage() {
     })).filter(item => Number.isFinite(item.x) && Number.isFinite(item.y) && Number.isFinite(item.cluster));
   }, [clusterResult]);
 
+  const clusterProfiles = useMemo(
+    () => asArray<any>(clusterResult?.artifacts?.clusters) ?? [],
+    [clusterResult],
+  );
+
   const districtBoxData = useMemo(
     () => asArray<any>(edaResult?.artifacts?.district_boxplot)?.filter(item => item.min !== null && item.max !== null),
     [edaResult]
@@ -185,7 +195,10 @@ export function AnalysisPage() {
       `- 任务编号：${job ? `#${job.id}` : "暂无真实任务"}`,
       `- 最佳模型：${regressionResult?.model_name ?? "暂无"}`,
       `- 样本量：${metrics.sample_count ?? "--"}，训练样本：${metrics.training_sample_count ?? metrics.train_count ?? "--"}，剔除样本：${metrics.excluded_count ?? 0}`,
+      `- 抽样覆盖：${metrics.sampling_district_count ?? "--"} 个区县，${metrics.sampling_source_count ?? "--"} 个数据来源`,
       `- 指标：MAE=${metrics.mae ?? "--"}，RMSE=${metrics.rmse ?? "--"}，R²=${metrics.r2 ?? "--"}，MAPE=${metrics.mape ?? "--"}%`,
+      `- 聚类：${clusterResult?.model_name ?? "暂无"}，轮廓系数=${clusterResult?.metrics?.silhouette_score ?? "--"}，分层数=${clusterResult?.metrics?.cluster_count ?? "--"}`,
+      `- 异常检测：${anomalyResult?.model_name ?? "暂无"}，异常样本=${anomalyResult?.metrics?.anomaly_count ?? "--"} 条，异常率=${anomalyResult?.metrics?.anomaly_rate !== undefined ? `${(Number(anomalyResult.metrics.anomaly_rate) * 100).toFixed(2)}%` : "--"}`,
       `- 主要特征：${topFeatures || "暂无"}`,
       "",
       "#### 候选模型对比",
@@ -193,7 +206,7 @@ export function AnalysisPage() {
       "",
       "说明：模型用于解释挂牌价影响因素和辅助估价，不代表成交价预测。",
     ].join("\n");
-  }, [featureImportance, job, modelComparisonRows, regressionResult]);
+  }, [anomalyResult, clusterResult, featureImportance, job, modelComparisonRows, regressionResult]);
 
   const jobLogs = useMemo(() => {
     if (!job) {
@@ -265,12 +278,12 @@ export function AnalysisPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 style={{ color: "#163A70", fontSize: 18, fontWeight: 700 }}>分析建模</h2>
-          <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 2 }}>EDA 探索 · 辅助估价 · KMeans 分层 · 异常检测</p>
+          <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 2 }}>EDA 探索 · 多模型辅助估价 · KMeans 分层 · IsolationForest 异常检测</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <StatusTag status={status} label={statusLabel} />
           <Button
             size="sm"
@@ -319,10 +332,10 @@ export function AnalysisPage() {
         ))}
       </div>
 
-      <div className="flex gap-5">
+      <div className="flex flex-col gap-5 xl:flex-row">
         <div className="flex-1 min-w-0">
           <Tabs defaultValue="eda">
-            <TabsList className="mb-4">
+            <TabsList className="mb-4 max-w-full justify-start overflow-x-auto">
               <TabsTrigger value="eda" style={{ fontSize: 13 }}>EDA 探索</TabsTrigger>
               <TabsTrigger value="predict" style={{ fontSize: 13 }}>预测分析</TabsTrigger>
               <TabsTrigger value="cluster" style={{ fontSize: 13 }}>聚类分析</TabsTrigger>
@@ -348,16 +361,42 @@ export function AnalysisPage() {
             </TabsContent>
 
             <TabsContent value="cluster">
-              <SectionCard title="KMeans 价值分层" subtitle={clusterResult?.summary ?? "暂无真实聚类结果"}>
-                <KMeansScatter data={clusterPoints} />
-              </SectionCard>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+                <div className="xl:col-span-2">
+                  <SectionCard title="KMeans 价值分层" subtitle={clusterResult?.summary ?? "暂无真实聚类结果"}>
+                    <KMeansScatter data={clusterPoints} />
+                  </SectionCard>
+                </div>
+                <SectionCard title="聚类画像" subtitle={`轮廓系数 ${clusterResult?.metrics?.silhouette_score ?? "--"}`}>
+                  <div className="flex flex-col gap-3">
+                    {clusterProfiles.length === 0 && (
+                      <div style={{ color: "#9CA3AF", fontSize: 13 }}>暂无真实聚类画像。</div>
+                    )}
+                    {clusterProfiles.map(profile => (
+                      <div key={`${profile.cluster}-${profile.label}`} className="rounded-lg p-3" style={{ background: "#F7F9FC", border: "1px solid #E5EAF2" }}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span style={{ color: "#163A70", fontSize: 13, fontWeight: 700 }}>{profile.label}</span>
+                          <span style={{ color: "#6B7280", fontSize: 12 }}>{profile.count} 条</span>
+                        </div>
+                        <div style={{ color: "#4B5563", fontSize: 12, lineHeight: 1.7, marginTop: 6 }}>
+                          均价 {Number(profile.avg_unit_price || 0).toLocaleString()} 元/㎡，
+                          面积 {Number(profile.avg_area || 0).toFixed(1)} ㎡，
+                          楼龄 {Number(profile.avg_house_age || 0).toFixed(1)} 年
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+              </div>
             </TabsContent>
 
             <TabsContent value="anomaly">
               <SectionCard title="挂牌价异常检测" subtitle={anomalyResult?.summary ?? "暂无真实异常检测结果"}>
                 <div className="flex items-center gap-2 mb-3 p-3 rounded-lg" style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}>
                   <AlertTriangle size={14} style={{ color: "#F59E0B" }} />
-                  <span style={{ fontSize: 12, color: "#92400E" }}>检测到 {anomalyRows.length} 条需复核样本</span>
+                  <span style={{ fontSize: 12, color: "#92400E" }}>
+                    共检测到 {Number(anomalyResult?.metrics?.anomaly_count ?? anomalyRows.length).toLocaleString()} 条需复核样本，当前展示 {anomalyRows.length} 条 · 算法：{anomalyResult?.metrics?.algorithm ?? anomalyResult?.evidence?.algorithm ?? "规则阈值"}
+                  </span>
                 </div>
                 <Table>
                   <TableHeader>
@@ -435,15 +474,18 @@ export function AnalysisPage() {
           </Tabs>
         </div>
 
-        <div className="w-56 flex-shrink-0 flex flex-col gap-4">
+        <div className="flex w-full flex-shrink-0 flex-col gap-4 xl:w-56">
           <SectionCard title="模型信息">
             <div className="flex flex-col gap-3">
               {[
                 ["算法", regressionResult?.model_name ?? "--"],
                 ["任务ID", job ? `#${job.id}` : "--"],
                 ["有效样本", `${job?.sample_count ?? "--"}`],
+                ["区县覆盖", `${regressionResult?.metrics?.sampling_district_count ?? "--"} 个`],
+                ["数据来源", `${regressionResult?.metrics?.sampling_source_count ?? "--"} 个`],
                 ["训练集", `${job?.train_count ?? "--"}`],
                 ["测试集", `${job?.test_count ?? "--"}`],
+                ["异常率", anomalyResult?.metrics?.anomaly_rate !== undefined ? `${(Number(anomalyResult.metrics.anomaly_rate) * 100).toFixed(2)}%` : "--"],
                 ["上次训练", job?.finished_at ?? "--"],
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between items-center gap-2 py-1" style={{ borderBottom: "1px solid #E5EAF2" }}>

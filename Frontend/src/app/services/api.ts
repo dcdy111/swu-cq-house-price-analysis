@@ -248,6 +248,11 @@ export interface LatestAnalysisJob {
   results: AnalysisResult[];
 }
 
+export interface LatestAnalysisByType extends LatestAnalysisJob {
+  jobs_by_type: Record<string, Omit<AnalysisJob, "results">>;
+  note?: string;
+}
+
 export interface AgentToolCall {
   id: number;
   session_id: string;
@@ -482,7 +487,20 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     },
     ...options,
   });
-  const payload = (await response.json()) as ApiEnvelope<T>;
+  const contentType = response.headers.get("Content-Type") || "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    const text = await response.text();
+    const preview = text.trim().slice(0, 80).replace(/\s+/g, " ");
+    throw new Error(
+      `后端接口返回非 JSON 响应(${response.status})。请确认 VITE_API_BASE_URL 或 Vite 代理指向当前 Flask 后端；响应预览: ${preview}`,
+    );
+  }
+  let payload: ApiEnvelope<T>;
+  try {
+    payload = (await response.json()) as ApiEnvelope<T>;
+  } catch {
+    throw new Error(`后端接口 JSON 解析失败(${response.status})，请检查当前后端服务是否为最新代码。`);
+  }
   if (!response.ok || payload.code !== 0) {
     throw new Error(payload.message || `请求失败: ${response.status}`);
   }
@@ -577,6 +595,9 @@ export const api = {
   },
   getLatestAnalysisJob() {
     return request<LatestAnalysisJob>("/api/analysis/jobs/latest");
+  },
+  getLatestAnalysisResultsByType() {
+    return request<LatestAnalysisByType>("/api/analysis/results/latest-by-type");
   },
   createAnalysisJob(payload: { job_type: "all" | "eda" | "regression" | "cluster" | "anomaly"; max_samples?: number }) {
     return request<AnalysisJob>("/api/analysis/jobs", {

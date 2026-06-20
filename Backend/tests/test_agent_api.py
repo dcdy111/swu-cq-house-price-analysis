@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from Backend.agent.deepseek_client import DeepSeekClient
 from Backend.extensions import db
 from Backend.models.agent import AgentToolCall, GeneratedReport
 from Backend.services.analysis_service import AnalysisService
@@ -79,6 +80,11 @@ def test_agent_report_generation_is_persisted_and_readable(client):
     assert report_response.status_code == 200
     assert report_payload["data"]["title"] == "重庆二手房挂牌价市场分析报告"
     assert "market" in report_payload["data"]["evidence"]
+    runtime = report_payload["data"]["evidence"]["agent_runtime"]
+    assert runtime["response_model"] == data["model"]
+    assert runtime["deepseek_used"] is ("fallback" not in data["model"])
+    assert runtime["tool_names"] == tool_names
+    assert runtime["answer_length"] == len(data["answer"])
 
     pdf_response = client.get(f"/api/reports/{data['report']['id']}/export.pdf")
     assert pdf_response.status_code == 200
@@ -95,3 +101,32 @@ def test_agent_tools_are_whitelisted(client):
     assert "query_market_stats" in names
     assert "generate_report" in names
     assert "execute_sql" not in names
+
+
+def test_model_tool_evidence_keeps_feature_importance(client):
+    seed_agent_data()
+    AnalysisService.create_job({"job_type": "all", "max_samples": 100})
+
+    response = client.post(
+        "/api/agent/chat",
+        json={"session_id": "model-evidence", "question": "最新模型的特征重要性是什么？"},
+    )
+    data = response.get_json()["data"]
+
+    model_call = next(item for item in data["tool_calls"] if item["tool_name"] == "get_model_result")
+    regression = next(
+        item for item in model_call["tool_result"]["results"] if item["result_type"] == "regression"
+    )
+    assert regression["feature_importance"]
+    assert len(regression["feature_importance"]) <= 10
+
+
+def test_deepseek_grounding_guard_accepts_tool_numbers_and_rejects_external_claims():
+    evidence = {"market": {"avg_unit_price": 11491.46, "listing_count": 13782, "metric_note": "不代表成交价"}}
+
+    assert DeepSeekClient._is_grounded_answer(
+        "平均挂牌单价为 11,491.46 元/平方米，样本量 13,782 套；以上数据不代表成交价。",
+        evidence,
+    )
+    assert not DeepSeekClient._is_grounded_answer("平均挂牌单价为 12,000 元/平方米。", evidence)
+    assert not DeepSeekClient._is_grounded_answer("建议再结合近期成交价判断。", evidence)

@@ -73,6 +73,7 @@ class AgentService:
 
         fallback_answer = self._compose_answer(question, evidence, tool_calls)
         answer, model_name = DeepSeekClient.generate_answer(question, evidence, fallback_answer)
+        self._persist_report_runtime(evidence, tool_calls, model_name, answer)
         return {
             "session_id": session_id,
             "answer": answer,
@@ -81,6 +82,25 @@ class AgentService:
             "thinking": self._execution_summary(tool_calls),
             "model": model_name,
         }
+
+    @staticmethod
+    def _persist_report_runtime(evidence: dict, tool_calls: list[dict], model_name: str, answer: str) -> None:
+        report_id = ((evidence.get("report") or {}).get("report") or {}).get("id")
+        if not report_id:
+            return
+        report = db.session.get(GeneratedReport, int(report_id))
+        if report is None:
+            return
+        report_evidence = dict(report.evidence or {})
+        report_evidence["agent_runtime"] = {
+            "response_model": model_name,
+            "deepseek_used": "fallback" not in model_name,
+            "grounding_guard_applied": model_name.endswith("+grounding-guard"),
+            "tool_names": [item.get("tool_name") for item in tool_calls],
+            "answer_length": len(answer or ""),
+        }
+        report.set_evidence(report_evidence)
+        db.session.commit()
 
     def list_tools(self) -> dict:
         return {"items": self.registry.list_tools()}
@@ -148,6 +168,7 @@ class AgentService:
         if tool_name == "get_model_result" and result.get("results"):
             compact_results = []
             for item in result["results"]:
+                artifacts = item.get("artifacts") or {}
                 compact_results.append(
                     {
                         "id": item.get("id"),
@@ -155,7 +176,9 @@ class AgentService:
                         "model_name": item.get("model_name"),
                         "summary": item.get("summary"),
                         "metrics": item.get("metrics") or {},
-                        "artifact_keys": sorted((item.get("artifacts") or {}).keys()),
+                        "artifact_keys": sorted(artifacts.keys()),
+                        "feature_importance": (artifacts.get("feature_importance") or [])[:10],
+                        "cluster_profiles": (artifacts.get("clusters") or [])[:6],
                     }
                 )
             return {**result, "results": compact_results}

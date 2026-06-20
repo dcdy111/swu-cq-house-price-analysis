@@ -84,6 +84,9 @@ def test_create_analysis_job_generates_all_result_types(client):
     assert regression["artifacts"]["model_note"].startswith("该模型用于解释")
     assert "分类特征" in "；".join(regression["evidence"]["feature_groups"])
     assert "楼盘目标编码" in "；".join(regression["evidence"]["feature_groups"])
+    assert regression["evidence"]["sampling"]["strategy"] == "district_stratified_deterministic"
+    assert regression["evidence"]["sampling"]["district_count"] == 6
+    assert regression["metrics"]["sampling_district_count"] == 6
 
     candidates = [item for item in data["results"] if item["result_type"] == "regression_candidate"]
     assert len(candidates) == len(regression["artifacts"]["model_comparison"])
@@ -92,7 +95,14 @@ def test_create_analysis_job_generates_all_result_types(client):
 
     cluster = next(item for item in data["results"] if item["result_type"] == "cluster")
     assert cluster["metrics"]["cluster_count"] >= 2
+    assert cluster["metrics"]["algorithm"] == "sklearn.cluster.KMeans"
+    assert "silhouette_score" in cluster["metrics"]
     assert cluster["artifacts"]["clusters"]
+
+    anomaly = next(item for item in data["results"] if item["result_type"] == "anomaly")
+    assert anomaly["metrics"]["algorithm"] == "sklearn.ensemble.IsolationForest"
+    assert "anomaly_count" in anomaly["metrics"]
+    assert anomaly["metrics"]["anomaly_rate"] <= 0.2
 
     assert AnalysisJob.query.count() == 1
     assert ModelResult.query.count() == len(data["results"])
@@ -113,6 +123,27 @@ def test_get_analysis_job_and_latest(client):
     assert latest_payload["code"] == 0
     assert latest_payload["data"]["job"]["id"] == created["id"]
     assert latest_payload["data"]["results"][0]["result_type"] == "regression"
+
+
+def test_latest_results_by_type_keeps_full_demo_chain(client):
+    seed_analysis_data()
+    all_job = client.post("/api/analysis/jobs", json={"job_type": "all"}).get_json()["data"]
+    regression_job = client.post("/api/analysis/jobs", json={"job_type": "regression"}).get_json()["data"]
+
+    response = client.get("/api/analysis/results/latest-by-type")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["code"] == 0
+    data = payload["data"]
+    assert data["job"]["id"] == regression_job["id"]
+
+    by_type = {item["result_type"]: item for item in data["results"] if item["result_type"] != "regression_candidate"}
+    assert {"eda", "regression", "cluster", "anomaly"} <= set(by_type)
+    assert by_type["regression"]["job_id"] == regression_job["id"]
+    assert by_type["cluster"]["job_id"] == all_job["id"]
+    assert by_type["anomaly"]["job_id"] == all_job["id"]
+    assert len([item for item in data["results"] if item["result_type"] == "regression_candidate"]) >= 3
 
 
 def test_invalid_analysis_job_type_returns_400(client):
@@ -165,3 +196,24 @@ def test_regression_filter_excludes_extreme_training_samples():
     assert exclusion["policy"]["enabled"] is True
     assert exclusion["excluded_count"] >= 2
     assert {item["id"] for item in kept}.isdisjoint({90, 91})
+
+
+def test_district_stratified_sampling_covers_each_available_district(app):
+    seed_analysis_data()
+
+    records = AnalysisService._load_records(max_samples=6)
+
+    assert len(records) == 6
+    assert len({item["district"] for item in records}) == 6
+    assert AnalysisService._load_records(max_samples=6) == records
+
+
+def test_allocate_strata_is_bounded_and_preserves_coverage():
+    allocation = AnalysisService._allocate_strata(
+        {"渝北": 100, "江北": 50, "南岸": 20, "渝中": 5},
+        target=20,
+    )
+
+    assert sum(allocation.values()) == 20
+    assert set(allocation) == {"渝北", "江北", "南岸", "渝中"}
+    assert all(value >= 1 for value in allocation.values())

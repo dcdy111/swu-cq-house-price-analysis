@@ -19,6 +19,29 @@ TEST_DATABASE_URL=mysql+pymysql://root:root@127.0.0.1:3306/real_estate_test?char
 
 测试也使用 MySQL 的 `real_estate_test`，不使用 SQLite 内存库。
 
+## 本地联调推荐启动方式
+
+如果本机已经有旧 Flask/Vite 进程占用 `5000/5173`，前端可能请求到旧后端，表现为登录时报
+`Unexpected token '<'` 或 `/api/auth/login` 返回 HTML。推荐用本地启动脚本显式绑定当前后端：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start_local_dev.ps1
+```
+
+如果端口被旧服务占用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start_local_dev.ps1 -UseFreePorts
+```
+
+脚本会把前端 `VITE_API_BASE_URL` 指向当前 Flask 后端，避免依赖 Vite 代理猜测。启动后可做只读接口检查：
+
+```bash
+python scripts/local_demo_smoke.py --base-url http://127.0.0.1:5000
+```
+
+如需连同 Agent 问数一起验收，可加 `--include-agent`，但这会新增一条 `agent_tool_calls` 记录。
+
 ## 调度与质量报告
 
 默认不启动后台调度，避免开发时自动爬取。需要定期生成质量报告或增量采集时，在 `.env` 中开启：
@@ -65,7 +88,7 @@ curl -X POST http://127.0.0.1:5000/api/scheduler/run-incremental-crawl ^
 ```bash
 curl -X POST http://127.0.0.1:5000/api/analysis/jobs ^
   -H "Content-Type: application/json" ^
-  -d "{\"job_type\":\"regression\",\"max_samples\":1000}"
+  -d "{\"job_type\":\"all\",\"max_samples\":1000}"
 ```
 
 模型结果落库检查：
@@ -76,6 +99,14 @@ FROM model_results
 WHERE job_id = (SELECT MAX(id) FROM analysis_jobs WHERE status = 'success')
 ORDER BY id;
 ```
+
+本地增量与快照验收：
+
+```bash
+python scripts/verify_incremental_snapshot.py
+```
+
+该脚本会创建一条本地验收样本，验证“重复写入不新增主表、价格变化新增快照”，默认验证后清理样本；需要保留数据库证据时可加 `--keep`。
 
 ## 前端运行
 

@@ -387,7 +387,7 @@ export function DashboardPage() {
               </div>
               <div className="p-3 rounded-lg" style={{ background: "#EFF6FF", border: "1px solid #BFDBFE" }}>
                 <p style={{ fontSize: 12, color: "#1F4E8C", lineHeight: 1.6 }}>
-                  已可用于分析的样本 {fmt(kpis?.analysis_ready_count ?? 0)} 条。模型指标将在“分析建模”模块接入后展示。
+                  已可用于分析的样本 {fmt(kpis?.analysis_ready_count ?? 0)} 条。模型指标、聚类画像和异常检测结果可在“分析建模”模块查看。
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-2">

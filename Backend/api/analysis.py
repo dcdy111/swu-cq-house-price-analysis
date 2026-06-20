@@ -37,6 +37,11 @@ def latest_job():
     return api_success({"job": data, "results": data["results"]})
 
 
+@bp.get("/results/latest-by-type")
+def latest_results_by_type():
+    return api_success(AnalysisService.latest_results_by_type())
+
+
 @bp.get("/jobs/<int:job_id>")
 def get_job(job_id: int):
     job = AnalysisService.get_job(job_id)

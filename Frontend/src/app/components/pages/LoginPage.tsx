@@ -52,7 +52,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
           <div className="text-center">
             <h1 style={{ color: "#fff", fontSize: 22, fontWeight: 700, lineHeight: 1.4 }}>重庆二手房价格数据</h1>
             <h1 style={{ color: "#fff", fontSize: 22, fontWeight: 700, lineHeight: 1.4 }}>分析与智能可视化系统</h1>
-            <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, marginTop: 12 }}>基于 XGBoost · DeepSeek Agent · Recharts</p>
+            <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, marginTop: 12 }}>scikit-learn · DeepSeek Agent · ECharts / Recharts</p>
           </div>
 
           <div className="w-full" style={{ maxWidth: 480 }}>
@@ -111,7 +111,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
                 <Checkbox id="remember" defaultChecked />
                 <Label htmlFor="remember" style={{ fontSize: 12, fontWeight: 400, cursor: "pointer" }}>记住我</Label>
               </div>
-              <button style={{ fontSize: 12, color: "#1F4E8C" }}>忘记密码?</button>
+              <span style={{ fontSize: 12, color: "#9CA3AF" }}>课程演示环境</span>
             </div>
           </div>
 
@@ -124,15 +124,9 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             {loading ? "登录中..." : "登 录"}
           </Button>
 
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px" style={{ background: "#E5EAF2" }} />
-            <span style={{ fontSize: 12, color: "#9CA3AF" }}>或</span>
-            <div className="flex-1 h-px" style={{ background: "#E5EAF2" }} />
-          </div>
-
-          <Button variant="outline" className="w-full h-10" style={{ fontSize: 13 }}>
-            SSO 统一身份认证登录
-          </Button>
+          <p className="text-center" style={{ fontSize: 12, color: "#9CA3AF" }}>
+            当前版本仅提供本地管理员登录，不包含统一身份认证。
+          </p>
         </div>
 
         <p style={{ fontSize: 12, color: "#9CA3AF" }}>© 2026 西南大学商贸学院 · 数据科学与大数据技术</p>

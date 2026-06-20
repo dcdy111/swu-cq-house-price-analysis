@@ -106,17 +106,9 @@ class SettingsService:
 
     @staticmethod
     def test_deepseek_connection() -> dict:
-        settings = SettingsService.effective_settings(include_secret=True)["deepseek"]
-        if not settings.get("enabled"):
-            return {"ok": False, "message": "DeepSeek 当前未启用"}
-        if not settings.get("api_key"):
-            return {"ok": False, "message": "DeepSeek API Key 未配置"}
-        return {
-            "ok": True,
-            "message": "DeepSeek 配置已保存，真实对话会在 Agent 页面调用。",
-            "base_url": settings.get("base_url"),
-            "model": settings.get("model"),
-        }
+        from Backend.agent.deepseek_client import DeepSeekClient
+
+        return DeepSeekClient.test_connection()
 
     @staticmethod
     def source_enabled(source: str, default: bool = True) -> bool:
