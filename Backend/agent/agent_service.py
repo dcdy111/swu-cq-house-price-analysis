@@ -73,6 +73,7 @@ class AgentService:
 
         fallback_answer = self._compose_answer(question, evidence, tool_calls)
         answer, model_name = DeepSeekClient.generate_answer(question, evidence, fallback_answer)
+        answer = self._ensure_answer_sections(answer, fallback_answer)
         self._persist_report_runtime(evidence, tool_calls, model_name, answer)
         return {
             "session_id": session_id,
@@ -101,6 +102,15 @@ class AgentService:
         }
         report.set_evidence(report_evidence)
         db.session.commit()
+
+    @staticmethod
+    def _ensure_answer_sections(answer: str, fallback_answer: str) -> str:
+        text = str(answer or "").strip()
+        if all(label in text for label in ["结论", "关键证据", "可执行建议"]):
+            return text
+        if "关键证据" in text and "可执行建议" in text:
+            return f"**结论**\n{text}"
+        return fallback_answer
 
     def list_tools(self) -> dict:
         return {"items": self.registry.list_tools()}

@@ -226,9 +226,17 @@ export function SettingsPage() {
                   <Input type="number" value={settings?.crawler.max_workers ?? ""} min={1} max={10}
                     onChange={e => updateCrawler({ max_workers: toNumber(e.target.value, 3) })} style={{ fontSize: 13 }} />
                 </Field>
+                <Field label="每区最大页数">
+                  <Input type="number" value={settings?.crawler.max_pages_per_district ?? ""} min={1} max={500}
+                    onChange={e => updateCrawler({ max_pages_per_district: toNumber(e.target.value, 200) })} style={{ fontSize: 13 }} />
+                </Field>
                 <Field label="请求超时 (秒)">
                   <Input type="number" value={settings?.crawler.request_timeout ?? ""}
                     onChange={e => updateCrawler({ request_timeout: toNumber(e.target.value, 15) })} style={{ fontSize: 13 }} />
+                </Field>
+                <Field label="失败重试次数">
+                  <Input type="number" value={settings?.crawler.retry_times ?? ""} min={0} max={5}
+                    onChange={e => updateCrawler({ retry_times: toNumber(e.target.value, 2) })} style={{ fontSize: 13 }} />
                 </Field>
                 <Field label="最小请求间隔 (秒)">
                   <Input type="number" value={settings?.crawler.interval_min ?? ""} step="0.1"

@@ -12,4 +12,8 @@ class PageCrawlResult:
     ok: bool
     listings: list[dict] = field(default_factory=list)
     message: str = ""
-
+    final_url: str | None = None
+    status_code: int | None = None
+    elapsed_ms: int | None = None
+    html_bytes: int | None = None
+    attempts: int = 1

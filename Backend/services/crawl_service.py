@@ -24,13 +24,18 @@ class CrawlService:
         if crawler is None:
             raise ValueError(f"未知数据源: {source}")
 
-        max_pages = min(50, max(1, int(payload.get("max_pages") or 1)))
         crawler_settings = SettingsService.effective_settings(include_secret=False).get("crawler", {})
+        max_pages_cap = int(
+            crawler_settings.get("max_pages_per_district") or current_app.config["CRAWL_MAX_PAGES_PER_DISTRICT"]
+        )
+        max_pages = min(max_pages_cap, max(1, int(payload.get("max_pages") or 1)))
         config_workers = int(crawler_settings.get("max_workers") or current_app.config["CRAWL_MAX_WORKERS"])
         max_workers = min(config_workers, max(1, int(payload.get("max_workers") or min(3, config_workers))))
         districts = payload.get("districts") or []
         if isinstance(districts, str):
             districts = [x.strip() for x in districts.split(",") if x.strip()]
+        if any(str(item).lower() in {"all", "全部", "全部区县"} for item in districts):
+            districts = list(crawler.district_map.keys())
         if not districts:
             districts = list(crawler.district_map.keys())[:1]
         invalid = [item for item in districts if item not in crawler.district_map]
@@ -49,7 +54,11 @@ class CrawlService:
         task.set_districts(districts)
         db.session.add(task)
         db.session.commit()
-        CrawlService.add_log(task.id, "INFO", "任务已创建，等待执行")
+        CrawlService.add_log(
+            task.id,
+            "INFO",
+            f"任务已创建，等待执行：区县 {len(districts)} 个，每区 {max_pages} 页，并发 {max_workers}",
+        )
         return task
 
     @staticmethod
@@ -165,7 +174,15 @@ class CrawlService:
         task.snapshot_count = 0
         task.total_pages = len(task.districts) * task.max_pages
         db.session.commit()
-        CrawlService.add_log(task.id, "INFO", f"开始执行任务，来源={crawler.source_name}，区县={','.join(task.districts)}")
+        CrawlService.add_log(
+            task.id,
+            "INFO",
+            (
+                f"开始执行任务，来源={crawler.source_name}，区县={','.join(task.districts)}，"
+                f"总页数={task.total_pages}，并发={task.max_workers}，请求间隔={crawler.interval[0]}-{crawler.interval[1]}秒，"
+                f"重试={crawler.retry_times}次"
+            ),
+        )
 
         jobs = [(district, page) for district in task.districts for page in range(1, task.max_pages + 1)]
         try:
@@ -198,7 +215,7 @@ class CrawlService:
                         CrawlService.add_log(
                             task.id,
                             "INFO",
-                            result.message,
+                            CrawlService._format_page_result(result),
                             url=result.url,
                             district=result.district,
                             page=result.page,
@@ -217,7 +234,7 @@ class CrawlService:
                         CrawlService.add_log(
                             task.id,
                             "WARN",
-                            result.message,
+                            CrawlService._format_page_result(result),
                             url=result.url,
                             district=result.district,
                             page=result.page,
@@ -230,7 +247,11 @@ class CrawlService:
             CrawlService.add_log(
                 task.id,
                 "INFO",
-                f"任务结束：新增 {task.inserted_count}，更新 {task.updated_count}，未变 {task.unchanged_count}，失败页 {task.failed_pages}",
+                (
+                    f"任务结束：新增 {task.inserted_count}，价格变化 {task.updated_count}，未变 {task.unchanged_count}，"
+                    f"失败页 {task.failed_pages}，耗时 {task.duration_seconds}s，"
+                    f"吞吐 {task.listings_per_minute or 0} 条/分钟，页面 {task.pages_per_minute or 0} 页/分钟"
+                ),
             )
             return task
         except Exception as exc:
@@ -260,3 +281,19 @@ class CrawlService:
         if task.status == "cancel_requested":
             return task
         raise ValueError(f"当前状态不能取消: {task.status}")
+
+    @staticmethod
+    def _format_page_result(result) -> str:
+        parts = [result.message]
+        if result.status_code is not None:
+            parts.append(f"HTTP {result.status_code}")
+        if result.elapsed_ms is not None:
+            parts.append(f"{result.elapsed_ms}ms")
+        if result.html_bytes is not None:
+            parts.append(f"{result.html_bytes} bytes")
+        if result.attempts:
+            parts.append(f"attempts={result.attempts}")
+        final_url = result.final_url or result.url
+        if final_url and final_url != result.url:
+            parts.append(f"final_url={final_url}")
+        return "；".join(parts)

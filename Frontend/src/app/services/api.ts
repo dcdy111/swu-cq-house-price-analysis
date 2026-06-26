@@ -129,7 +129,9 @@ export interface LoginResponse {
 export interface SystemSettings {
   crawler: {
     max_workers: number;
+    max_pages_per_district: number;
     request_timeout: number;
+    retry_times: number;
     interval_min: number;
     interval_max: number;
     sources: Record<string, { enabled: boolean }>;

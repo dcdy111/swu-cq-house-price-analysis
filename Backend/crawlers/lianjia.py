@@ -16,6 +16,7 @@ class LianjiaCrawler(BaseCrawler):
     description = "链家移动端重庆二手房页；需配置 LIANJIA_COOKIE，适合作为高质量实验源，不默认大规模采集。"
     base_url = "https://m.lianjia.com"
     district_map = {
+        "全部": "/cq/ershoufang/",
         "江北": "/cq/ershoufang/jiangbei/",
         "渝北": "/cq/ershoufang/yubei/",
         "南岸": "/cq/ershoufang/nanan/",
@@ -34,13 +35,13 @@ class LianjiaCrawler(BaseCrawler):
         return self.absolute_url(path.rstrip("/") + f"/pg{page}/")
 
     def headers(self) -> dict:
-        headers = super().headers()
+        headers = self.default_headers()
         headers["User-Agent"] = (
             "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
         )
         headers["Referer"] = "https://m.lianjia.com/cq/ershoufang/"
-        return headers
+        return self.apply_runtime_headers(headers)
 
     def parse(self, html: str, district: str, url: str) -> list[dict]:
         soup = BeautifulSoup(html, "html.parser")
@@ -48,8 +49,9 @@ class LianjiaCrawler(BaseCrawler):
             return []
 
         mobile_results = self._parse_mobile_state(html, district, url)
-        if mobile_results:
-            return mobile_results
+        dom_results = self._parse_mobile_dom(soup, district, url)
+        if mobile_results or dom_results:
+            return self._dedupe(mobile_results + dom_results)
 
         results: list[dict] = []
         for item in soup.select(".sellListContent li"):
@@ -98,6 +100,67 @@ class LianjiaCrawler(BaseCrawler):
                     "decoration": decoration,
                     "floor_text": floor_text,
                     "build_year": build_year,
+                    "tags": tags[:8],
+                    "status": "active",
+                }
+            )
+        return results
+
+    @staticmethod
+    def _dedupe(items: list[dict]) -> list[dict]:
+        seen: set[str] = set()
+        output: list[dict] = []
+        for item in items:
+            key = item.get("source_listing_id") or item.get("link") or f"{item.get('title')}|{item.get('area')}|{item.get('total_price')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            output.append(item)
+        return output
+
+    def _parse_mobile_dom(self, soup: BeautifulSoup, district: str, url: str) -> list[dict]:
+        results: list[dict] = []
+        for item in soup.select(".kem__house-tile-ershou"):
+            link_elem = item.find_parent("a", href=True) or item.select_one("a[href]")
+            link = self.absolute_url(link_elem.get("href")) if link_elem else url
+            title_elem = item.select_one(".house-title")
+            title = self._clean_text(title_elem.get_text(" ", strip=True) if title_elem else "")
+            desc_elem = item.select_one(".house-desc")
+            desc_text = self._clean_text(desc_elem.get_text(" ", strip=True) if desc_elem else "")
+            desc_parts = self._split_desc(desc_text)
+            layout = desc_parts[0] if len(desc_parts) > 0 else None
+            area = self._extract_float(desc_parts[1] if len(desc_parts) > 1 else "", r"(\d+(?:\.\d+)?)")
+            orientation = desc_parts[2] if len(desc_parts) > 2 else None
+            community = desc_parts[3] if len(desc_parts) > 3 else None
+            if community:
+                community = re.sub(r"二手房$", "", community)
+
+            total_elem = item.select_one(".price-total")
+            unit_elem = item.select_one(".price-unit")
+            total_price = self._extract_float(total_elem.get_text(" ", strip=True) if total_elem else "", r"(\d+(?:\.\d+)?)")
+            unit_price = self._extract_float(unit_elem.get_text(" ", strip=True) if unit_elem else "", r"(\d+(?:\.\d+)?)")
+            tags = [x.get_text(" ", strip=True) for x in item.select(".house-tags .tag, .tag") if x.get_text(strip=True)]
+            source_listing_id = item.get("data-id") or self._source_id_from_link(link)
+
+            if not title or not link:
+                continue
+            results.append(
+                {
+                    "source": self.source_key,
+                    "source_listing_id": source_listing_id,
+                    "title": title,
+                    "link": link,
+                    "district": district,
+                    "community": community,
+                    "address": desc_text,
+                    "total_price": total_price,
+                    "unit_price": unit_price,
+                    "area": area,
+                    "layout": layout,
+                    "orientation": orientation,
+                    "decoration": None,
+                    "floor_text": None,
+                    "build_year": None,
                     "tags": tags[:8],
                     "status": "active",
                 }
@@ -227,7 +290,7 @@ class LianjiaCrawler(BaseCrawler):
 
     @staticmethod
     def _extract_float(text: str, pattern: str) -> float | None:
-        match = re.search(pattern, text or "")
+        match = re.search(pattern, (text or "").replace(",", ""))
         return float(match.group(1)) if match else None
 
     @staticmethod

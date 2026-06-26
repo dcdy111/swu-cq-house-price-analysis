@@ -27,6 +27,7 @@ def get_crawler(source: str):
             float(crawler_settings.get("interval_min") or current_app.config["CRAWL_INTERVAL_MIN"]),
             float(crawler_settings.get("interval_max") or current_app.config["CRAWL_INTERVAL_MAX"]),
         ),
+        retry_times=int(crawler_settings.get("retry_times") or current_app.config["CRAWL_RETRY_TIMES"]),
     )
     crawler.enabled_override = SettingsService.source_enabled(source, default=crawler.enabled)
     return crawler

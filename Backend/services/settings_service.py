@@ -34,7 +34,9 @@ class SettingsService:
         return {
             "crawler": {
                 "max_workers": int(current_app.config.get("CRAWL_MAX_WORKERS", 4)),
+                "max_pages_per_district": int(current_app.config.get("CRAWL_MAX_PAGES_PER_DISTRICT", 200)),
                 "request_timeout": int(current_app.config.get("CRAWL_REQUEST_TIMEOUT", 15)),
+                "retry_times": int(current_app.config.get("CRAWL_RETRY_TIMES", 2)),
                 "interval_min": float(current_app.config.get("CRAWL_INTERVAL_MIN", 1.0)),
                 "interval_max": float(current_app.config.get("CRAWL_INTERVAL_MAX", 3.0)),
                 "sources": {
@@ -167,7 +169,9 @@ class SettingsService:
     def _sanitize(settings: dict) -> None:
         crawler = settings["crawler"]
         crawler["max_workers"] = min(8, max(1, int(crawler.get("max_workers") or 4)))
+        crawler["max_pages_per_district"] = min(500, max(1, int(crawler.get("max_pages_per_district") or 200)))
         crawler["request_timeout"] = min(60, max(5, int(crawler.get("request_timeout") or 15)))
+        crawler["retry_times"] = min(5, max(0, int(crawler.get("retry_times") or 2)))
         crawler["interval_min"] = max(0.0, float(crawler.get("interval_min") or 0))
         crawler["interval_max"] = max(crawler["interval_min"], float(crawler.get("interval_max") or crawler["interval_min"]))
 

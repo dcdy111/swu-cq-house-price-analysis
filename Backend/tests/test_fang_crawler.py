@@ -31,6 +31,50 @@ def test_fang_parse_sample_html():
     assert item["layout"] == "5室3厅"
 
 
+def test_fang_parse_mobile_list_card():
+    html = """
+    <section class="houseList2 esf">
+      <ul id="content">
+        <li class="listhouse" data-bg='{"houseid":"204649634"}'>
+          <a class="listtype" href="//m.fang.com/esf/cq/3_204649634.html">
+            <div class="txt">
+              <h3 class="line2">新上 汽博一线高尔夫独栋 花园900平</h3>
+              <p>
+                <span>455.79㎡</span><span>5室3厅</span><span>南</span><span>保利国际高尔夫花园别墅</span>
+              </p>
+              <div class="stag"><span>不满二</span><span>近地铁</span></div>
+              <div class="price"><span><em>1200</em>万</span><span class="del-price">26328元/㎡</span></div>
+            </div>
+          </a>
+        </li>
+      </ul>
+    </section>
+    """
+    crawler = FangCrawler(interval=(0, 0))
+    items = crawler.parse(html, "两江新区", "https://m.fang.com/esf/cq/")
+
+    assert len(items) == 1
+    item = items[0]
+    assert item["source_listing_id"] == "204649634"
+    assert item["link"] == "https://m.fang.com/esf/cq/3_204649634.html"
+    assert item["title"] == "新上 汽博一线高尔夫独栋 花园900平"
+    assert item["area"] == 455.79
+    assert item["layout"] == "5室3厅"
+    assert item["orientation"] == "南"
+    assert item["community"] == "保利国际高尔夫花园别墅"
+    assert item["total_price"] == 1200
+    assert item["unit_price"] == 26328
+    assert item["tags"] == ["不满二", "近地铁"]
+
+
+def test_fang_district_map_contains_uploaded_mobile_filters():
+    crawler = FangCrawler(interval=(0, 0))
+
+    assert len(crawler.district_map) >= 35
+    assert crawler.build_url("开州", 2) == "https://cq.esf.fang.com/house-a016748/i32/"
+    assert crawler.build_url("秀山", 1) == "https://cq.esf.fang.com/house-a017400/"
+
+
 def test_fang_check_gateway_is_detected_as_blocked():
     crawler = FangCrawler(interval=(0, 0))
     reason = crawler.detect_blocked(

@@ -29,7 +29,9 @@ class BaseConfig:
     JSON_AS_ASCII = False
 
     CRAWL_MAX_WORKERS = int(os.getenv("CRAWL_MAX_WORKERS", "4"))
+    CRAWL_MAX_PAGES_PER_DISTRICT = int(os.getenv("CRAWL_MAX_PAGES_PER_DISTRICT", "200"))
     CRAWL_REQUEST_TIMEOUT = int(os.getenv("CRAWL_REQUEST_TIMEOUT", "15"))
+    CRAWL_RETRY_TIMES = int(os.getenv("CRAWL_RETRY_TIMES", "2"))
     CRAWL_INTERVAL_MIN = float(os.getenv("CRAWL_INTERVAL_MIN", "1.0"))
     CRAWL_INTERVAL_MAX = float(os.getenv("CRAWL_INTERVAL_MAX", "3.0"))
     CRAWL_USER_AGENT = os.getenv(

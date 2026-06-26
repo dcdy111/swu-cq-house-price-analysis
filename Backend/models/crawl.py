@@ -55,6 +55,34 @@ class CrawlTask(db.Model):
         done = self.success_pages + self.failed_pages
         return min(100, int(done / self.total_pages * 100))
 
+    @property
+    def duration_seconds(self) -> float | None:
+        if not self.started_at:
+            return None
+        end = self.finished_at or datetime.utcnow()
+        return round(max(0.0, (end - self.started_at).total_seconds()), 2)
+
+    @property
+    def listings_per_minute(self) -> float | None:
+        duration = self.duration_seconds
+        if not duration:
+            return None
+        return round(self.total_found / duration * 60, 2)
+
+    @property
+    def pages_per_minute(self) -> float | None:
+        duration = self.duration_seconds
+        if not duration:
+            return None
+        done = self.success_pages + self.failed_pages
+        return round(done / duration * 60, 2)
+
+    @property
+    def failure_rate(self) -> float:
+        if self.total_pages <= 0:
+            return 0.0
+        return round(self.failed_pages / self.total_pages, 4)
+
     def to_dict(self, include_logs: bool = False) -> dict:
         data = {
             "id": self.id,
@@ -74,6 +102,10 @@ class CrawlTask(db.Model):
             "unchanged_count": self.unchanged_count,
             "snapshot_count": self.snapshot_count,
             "progress": self.progress,
+            "duration_seconds": self.duration_seconds,
+            "listings_per_minute": self.listings_per_minute,
+            "pages_per_minute": self.pages_per_minute,
+            "failure_rate": self.failure_rate,
             "error_message": self.error_message,
             "started_at": self.started_at.isoformat(sep=" ") if self.started_at else None,
             "finished_at": self.finished_at.isoformat(sep=" ") if self.finished_at else None,
