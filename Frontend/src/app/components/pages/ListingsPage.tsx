@@ -48,14 +48,23 @@ export function ListingsPage() {
   );
 
   useEffect(() => {
-    const preset = sessionStorage.getItem("listingSearch");
-    if (preset) {
+    const applyPreset = () => {
+      const preset = sessionStorage.getItem("listingSearch");
+      if (!preset) return;
       setKeyword(preset);
+      setDistrict("全部区县");
+      setSource("全部来源");
+      setPriceMin("");
+      setPriceMax("");
+      setPage(1);
       sessionStorage.removeItem("listingSearch");
-    }
+    };
+    applyPreset();
+    window.addEventListener("listing-search", applyPreset);
     api.getListingOptions().then(setOptions).catch(() => {
       setOptions({ districts: [], sources: [] });
     });
+    return () => window.removeEventListener("listing-search", applyPreset);
   }, []);
 
   useEffect(() => {

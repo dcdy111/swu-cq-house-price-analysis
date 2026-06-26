@@ -31,6 +31,8 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
     }
     sessionStorage.setItem("listingSearch", text);
     navigate("/listings");
+    window.dispatchEvent(new Event("listing-search"));
+    setKeyword("");
     toast.success(`已跳转到房源检索：${text}`);
   };
 
@@ -70,7 +72,7 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
         {/* Bell */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="relative rounded-full p-1.5 hover:bg-[#F7F9FC] transition-colors">
+            <button type="button" aria-label="系统通知" className="relative rounded-full p-1.5 hover:bg-[#F7F9FC] transition-colors">
               <Bell size={18} style={{ color: "#6B7280" }} />
             </button>
           </DropdownMenuTrigger>
@@ -96,7 +98,13 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
         {/* User */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-[#EFF6FF] transition-colors" style={{ background: "#F7F9FC" }}>
+            <button
+              type="button"
+              aria-label="用户菜单"
+              title="用户菜单"
+              className="flex min-w-10 items-center gap-2 px-3 py-1.5 rounded-full hover:bg-[#EFF6FF] transition-colors"
+              style={{ background: "#F7F9FC" }}
+            >
               <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: "#163A70" }}>
                 <User size={12} style={{ color: "#fff" }} />
               </div>
@@ -106,7 +114,7 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
               </div>
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuContent align="end" sideOffset={8} className="w-44 z-[100]">
             <DropdownMenuLabel style={{ fontSize: 12 }}>{user?.username ?? "admin"}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => navigate("/settings")}>
