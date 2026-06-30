@@ -12,15 +12,20 @@ interface SectionCardProps {
 export function SectionCard({ title, subtitle, action, children, className = "", noPad }: SectionCardProps) {
   return (
     <div
-      className={`rounded-xl ${className} glass-card`}
-      style={{ overflow: "hidden" }}
+      className={`rounded-xl ${className}`}
+      style={{ 
+        background: "#fff", 
+        border: "1px solid #E5EAF2", 
+        boxShadow: "0 2px 12px rgba(22, 58, 112, 0.06)",
+        overflow: "hidden"
+      }}
     >
       {(title || action) && (
         <div 
           className="flex items-center justify-between px-5 py-4"
           style={{ 
-            borderBottom: "1px solid var(--dark-card-border)",
-            background: "linear-gradient(90deg, rgba(79, 125, 189, 0.08) 0%, transparent 100%)"
+            borderBottom: "1px solid #E5EAF2",
+            background: "linear-gradient(90deg, #F8FAFC 0%, #fff 100%)"
           }}
         >
           <div>
@@ -28,7 +33,7 @@ export function SectionCard({ title, subtitle, action, children, className = "",
               <h3 style={{ 
                 fontSize: 14, 
                 fontWeight: 600, 
-                color: "var(--dark-text-primary)",
+                color: "#1F2937",
                 display: "flex",
                 alignItems: "center",
                 gap: 8
@@ -36,7 +41,7 @@ export function SectionCard({ title, subtitle, action, children, className = "",
                 <span style={{
                   width: 3,
                   height: 14,
-                  background: "linear-gradient(180deg, #4F7DBD 0%, #E67E22 100%)",
+                  background: "linear-gradient(180deg, #163A70 0%, #4F7DBD 100%)",
                   borderRadius: 2,
                   display: "inline-block"
                 }} />
@@ -44,7 +49,7 @@ export function SectionCard({ title, subtitle, action, children, className = "",
               </h3>
             )}
             {subtitle && (
-              <p style={{ fontSize: 12, color: "var(--dark-text-muted)", marginTop: 2 }}>
+              <p style={{ fontSize: 12, color: "#9CA3AF", marginTop: 2 }}>
                 {subtitle}
               </p>
             )}
@@ -52,7 +57,7 @@ export function SectionCard({ title, subtitle, action, children, className = "",
           {action}
         </div>
       )}
-      <div className={noPad ? "" : "p-5"} style={{ color: "var(--dark-text-primary)" }}>
+      <div className={noPad ? "" : "p-5"}>
         {children}
       </div>
     </div>

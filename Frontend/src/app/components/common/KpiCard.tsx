@@ -22,7 +22,6 @@ function AnimatedNumber({ value }: { value: string }) {
       ([entry]) => {
         if (entry.isIntersecting && !hasAnimated) {
           setHasAnimated(true);
-          // 提取数字
           const numStr = value.replace(/[^0-9.]/g, "");
           if (numStr) {
             const target = parseFloat(numStr);
@@ -33,7 +32,6 @@ function AnimatedNumber({ value }: { value: string }) {
             const animate = (currentTime: number) => {
               const elapsed = currentTime - startTime;
               const progress = Math.min(elapsed / duration, 1);
-              // 使用 easeOutExpo
               const easeProgress = 1 - Math.pow(1 - progress, 4);
               const current = Math.floor(start + (target - start) * easeProgress);
               setDisplayValue(current.toLocaleString());
@@ -75,17 +73,30 @@ export function KpiCard({ title, value, unit, change, changeLabel, icon, accent,
 
   return (
     <div
-      className={`rounded-xl p-5 flex flex-col gap-3 kpi-glass ${visible ? "fade-in-up" : "opacity-0"}`}
-      style={{ animationDelay: `${delay}ms` }}
+      className={`rounded-xl p-5 flex flex-col gap-3 fade-in-up ${visible ? "" : "opacity-0"}`}
+      style={{ 
+        animationDelay: `${delay}ms`,
+        background: accent ? "#163A70" : "#fff",
+        border: accent ? "none" : "1px solid #E5EAF2",
+        boxShadow: "0 2px 12px rgba(22, 58, 112, 0.08)",
+        transition: "all 0.3s ease"
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = "0 8px 24px rgba(22, 58, 112, 0.15)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "0 2px 12px rgba(22, 58, 112, 0.08)";
+      }}
     >
       <div className="flex items-start justify-between">
-        <span style={{ fontSize: 13, color: "var(--dark-text-secondary)" }}>{title}</span>
+        <span style={{ fontSize: 13, color: accent ? "rgba(255,255,255,0.7)" : "#6B7280" }}>{title}</span>
         {icon && (
           <div 
-            className="w-10 h-10 rounded-lg flex items-center justify-center pulse-glow"
+            className="w-10 h-10 rounded-lg flex items-center justify-center"
             style={{ 
-              background: accent ? "rgba(230, 126, 34, 0.2)" : "rgba(79, 125, 189, 0.15)",
-              border: `1px solid ${accent ? "rgba(230, 126, 34, 0.3)" : "rgba(79, 125, 189, 0.2)"}`
+              background: accent ? "rgba(255,255,255,0.15)" : "#F7F9FC"
             }}
           >
             {icon}
@@ -97,7 +108,7 @@ export function KpiCard({ title, value, unit, change, changeLabel, icon, accent,
           style={{ 
             fontSize: 30, 
             fontWeight: 700, 
-            color: accent ? "#fff" : "var(--dark-text-primary)",
+            color: accent ? "#fff" : "#1F2937",
             lineHeight: 1,
             fontFamily: "'SF Mono', 'Consolas', monospace"
           }}
@@ -105,7 +116,7 @@ export function KpiCard({ title, value, unit, change, changeLabel, icon, accent,
           <AnimatedNumber value={value} />
         </span>
         {unit && (
-          <span style={{ fontSize: 13, color: "var(--dark-text-muted)", marginBottom: 2 }}>
+          <span style={{ fontSize: 13, color: accent ? "rgba(255,255,255,0.6)" : "#9CA3AF", marginBottom: 2 }}>
             {unit}
           </span>
         )}
@@ -113,15 +124,15 @@ export function KpiCard({ title, value, unit, change, changeLabel, icon, accent,
       {change !== undefined && (
         <div className="flex items-center gap-1">
           {isPos ? (
-            <TrendingUp size={12} style={{ color: "#4ADE80" }} />
+            <TrendingUp size={12} style={{ color: "#16A34A" }} />
           ) : (
-            <TrendingDown size={12} style={{ color: "#F87171" }} />
+            <TrendingDown size={12} style={{ color: "#DC2626" }} />
           )}
-          <span style={{ fontSize: 12, color: isPos ? "#4ADE80" : "#F87171" }}>
+          <span style={{ fontSize: 12, color: isPos ? "#16A34A" : "#DC2626" }}>
             {isPos ? "+" : ""}{change}%
           </span>
           {changeLabel && (
-            <span style={{ fontSize: 12, color: "var(--dark-text-muted)" }}>
+            <span style={{ fontSize: 12, color: accent ? "rgba(255,255,255,0.5)" : "#9CA3AF" }}>
               {changeLabel}
             </span>
           )}

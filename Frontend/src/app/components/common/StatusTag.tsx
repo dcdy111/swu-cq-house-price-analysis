@@ -1,18 +1,18 @@
 type StatusType = "success" | "warn" | "danger" | "info" | "default";
 
 const STATUS_MAP: Record<string, { bg: string; text: string; dot: string; label: string }> = {
-  success: { bg: "rgba(22, 163, 74, 0.2)", text: "#4ADE80", dot: "#4ADE80", label: "" },
-  warn: { bg: "rgba(245, 158, 11, 0.2)", text: "#FBBF24", dot: "#FBBF24", label: "" },
-  danger: { bg: "rgba(220, 38, 38, 0.2)", text: "#F87171", dot: "#F87171", label: "" },
-  info: { bg: "rgba(79, 125, 189, 0.2)", text: "#60A5FA", dot: "#60A5FA", label: "" },
-  default: { bg: "rgba(255, 255, 255, 0.1)", text: "rgba(255, 255, 255, 0.6)", dot: "rgba(255, 255, 255, 0.4)", label: "" },
-  running: { bg: "rgba(79, 125, 189, 0.2)", text: "#60A5FA", dot: "#60A5FA", label: "运行中" },
-  pending: { bg: "rgba(255, 255, 255, 0.1)", text: "rgba(255, 255, 255, 0.6)", dot: "rgba(255, 255, 255, 0.4)", label: "待运行" },
-  paused: { bg: "rgba(245, 158, 11, 0.2)", text: "#FBBF24", dot: "#FBBF24", label: "已暂停" },
-  failed: { bg: "rgba(220, 38, 38, 0.2)", text: "#F87171", dot: "#F87171", label: "失败" },
-  partial_failed: { bg: "rgba(245, 158, 11, 0.2)", text: "#FBBF24", dot: "#FBBF24", label: "部分失败" },
-  active: { bg: "rgba(22, 163, 74, 0.2)", text: "#4ADE80", dot: "#4ADE80", label: "在售" },
-  sold: { bg: "rgba(255, 255, 255, 0.1)", text: "rgba(255, 255, 255, 0.6)", dot: "rgba(255, 255, 255, 0.4)", label: "已售" },
+  success: { bg: "#F0FDF4", text: "#16A34A", dot: "#16A34A", label: "" },
+  warn: { bg: "#FFFBEB", text: "#F59E0B", dot: "#F59E0B", label: "" },
+  danger: { bg: "#FEF2F2", text: "#DC2626", dot: "#DC2626", label: "" },
+  info: { bg: "#EFF6FF", text: "#1F4E8C", dot: "#4F7DBD", label: "" },
+  default: { bg: "#F3F4F6", text: "#6B7280", dot: "#9CA3AF", label: "" },
+  running: { bg: "#EFF6FF", text: "#1F4E8C", dot: "#4F7DBD", label: "运行中" },
+  pending: { bg: "#F3F4F6", text: "#6B7280", dot: "#9CA3AF", label: "待运行" },
+  paused: { bg: "#FFFBEB", text: "#F59E0B", dot: "#F59E0B", label: "已暂停" },
+  failed: { bg: "#FEF2F2", text: "#DC2626", dot: "#DC2626", label: "失败" },
+  partial_failed: { bg: "#FFFBEB", text: "#F59E0B", dot: "#F59E0B", label: "部分失败" },
+  active: { bg: "#F0FDF4", text: "#16A34A", dot: "#16A34A", label: "在售" },
+  sold: { bg: "#F3F4F6", text: "#6B7280", dot: "#9CA3AF", label: "已售" },
 };
 
 export function StatusTag({ status, label }: { status: string; label?: string }) {
@@ -24,16 +24,12 @@ export function StatusTag({ status, label }: { status: string; label?: string })
       style={{ 
         background: s.bg, 
         fontSize: 11, 
-        color: s.text,
-        border: `1px solid ${s.dot}33`
+        color: s.text
       }}
     >
       <span 
         className="w-1.5 h-1.5 rounded-full" 
-        style={{ 
-          background: s.dot,
-          boxShadow: `0 0 4px ${s.dot}`
-        }} 
+        style={{ background: s.dot }} 
       />
       {displayLabel}
     </span>

@@ -199,7 +199,7 @@ export function DashboardPage() {
         title: "快照记录",
         value: fmt(kpis?.snapshot_count ?? 0),
         unit: "条",
-        icon: <Bot size={20} style={{ color: "#163A70" }} />,
+        icon: <Bot size={20} style={{ color: "#fff" }} />,
         accent: true,
         delay: 600,
       },
@@ -229,14 +229,16 @@ export function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="gradient-text" style={{ fontSize: 20, fontWeight: 700 }}>首页总览</h2>
-          <p style={{ color: "var(--dark-text-muted)", fontSize: 13, marginTop: 4 }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "#163A70" }}>
+            首页总览
+          </h2>
+          <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 4 }}>
             最新数据时间：{latestDate} · 重庆二手房挂牌价数据概览
           </p>
         </div>
         <div className="flex items-center gap-3">
           <StatusTag 
-            status={loading ? "running" : error ? "failed" : "success"} 
+            status={loading ? "running" : error ? "danger" : "success"} 
             label={loading ? "加载中" : error ? "接口异常" : "后端数据"} 
           />
           <Button 
@@ -244,7 +246,6 @@ export function DashboardPage() {
             size="sm" 
             onClick={loadDashboard} 
             disabled={loading} 
-            className="dark-button"
             style={{ fontSize: 12, height: 34 }}
           >
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
@@ -257,9 +258,9 @@ export function DashboardPage() {
         <div 
           className="rounded-lg px-4 py-3 fade-in-up"
           style={{ 
-            background: "rgba(220, 38, 38, 0.1)", 
-            border: "1px solid rgba(220, 38, 38, 0.3)", 
-            color: "#F87171", 
+            background: "#FEF2F2", 
+            border: "1px solid #FECACA", 
+            color: "#DC2626", 
             fontSize: 13 
           }}
         >
@@ -282,7 +283,7 @@ export function DashboardPage() {
           action={
             <div 
               className="flex rounded-lg p-1"
-              style={{ background: "rgba(255, 255, 255, 0.05)", border: "1px solid rgba(255, 255, 255, 0.1)" }}
+              style={{ background: "#F3F4F6", border: "1px solid #E5EAF2" }}
             >
               {MAP_METRICS.map(item => (
                 <button
@@ -291,8 +292,8 @@ export function DashboardPage() {
                   className="px-2.5 py-1 rounded-md transition-all duration-200"
                   style={{
                     fontSize: 12,
-                    color: mapMetric === item.key ? "#fff" : "var(--dark-text-muted)",
-                    background: mapMetric === item.key ? "rgba(79, 125, 189, 0.4)" : "transparent",
+                    color: mapMetric === item.key ? "#fff" : "#6B7280",
+                    background: mapMetric === item.key ? "#163A70" : "transparent",
                   }}
                 >
                   {item.label}
@@ -318,20 +319,25 @@ export function DashboardPage() {
                 key={label} 
                 className="rounded-lg px-3 py-2"
                 style={{ 
-                  background: "rgba(255, 255, 255, 0.03)", 
-                  border: "1px solid rgba(255, 255, 255, 0.08)"
+                  background: "#F8FAFC", 
+                  border: "1px solid #E5EAF2"
                 }}
               >
-                <div style={{ fontSize: 11, color: "var(--dark-text-muted)" }}>{label}</div>
-                <div style={{ fontSize: 13, color: "var(--dark-text-primary)", fontWeight: 600, marginTop: 2 }}>{value}</div>
+                <div style={{ fontSize: 11, color: "#6B7280" }}>{label}</div>
+                <div style={{ fontSize: 13, color: "#1F2937", fontWeight: 600, marginTop: 2 }}>{value}</div>
               </div>
             ))}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               size="sm"
-              className="dark-button"
-              style={{ background: "rgba(79, 125, 189, 0.3)", border: "1px solid rgba(79, 125, 189, 0.4)", fontSize: 12, height: 32 }}
+              style={{ 
+                background: "#163A70", 
+                border: "1px solid #163A70", 
+                fontSize: 12, 
+                height: 32,
+                color: "#fff"
+              }}
               disabled={!selectedDistrict}
               onClick={() => selectedDistrict && focusListingSearch(selectedDistrict)}
             >
@@ -340,8 +346,7 @@ export function DashboardPage() {
             <Button
               size="sm"
               variant="outline"
-              className="dark-button"
-              style={{ fontSize: 12, height: 32, borderColor: "rgba(255, 255, 255, 0.1)" }}
+              style={{ fontSize: 12, height: 32, borderColor: "#E5EAF2" }}
               disabled={!selectedDistrict}
               onClick={() => selectedDistrict && prefillCrawlDistrict(selectedDistrict)}
             >
@@ -350,7 +355,7 @@ export function DashboardPage() {
             <Button 
               size="sm" 
               variant="ghost" 
-              style={{ fontSize: 12, height: 32, color: "var(--dark-text-secondary)" }} 
+              style={{ fontSize: 12, height: 32, color: "#6B7280" }} 
               onClick={() => setSelectedDistrict(null)}
             >
               查看全市
@@ -390,29 +395,29 @@ export function DashboardPage() {
           <SectionCard title="采集状态" subtitle="最近任务进度">
             <div className="flex flex-col gap-3">
               {crawlItems.length === 0 && (
-                <div style={{ color: "var(--dark-text-muted)", fontSize: 12, lineHeight: 1.7 }}>
+                <div style={{ color: "#6B7280", fontSize: 12, lineHeight: 1.7 }}>
                   暂无后端采集任务。可进入"采集任务管理"新建小规模试采集任务。
                 </div>
               )}
               {crawlItems.map(task => (
                 <div key={task.id} className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <span style={{ fontSize: 13, color: "var(--dark-text-primary)" }}>{sourceLabel(task.source)}</span>
+                    <span style={{ fontSize: 13, color: "#1F2937" }}>{sourceLabel(task.source)}</span>
                     <StatusTag status={task.status} label={statusLabel(task.status)} />
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 rounded-full" style={{ background: "rgba(255, 255, 255, 0.1)" }}>
+                    <div className="flex-1 h-1.5 rounded-full" style={{ background: "#E5EAF2" }}>
                       <div
                         className="h-full rounded-full transition-all duration-500"
                         style={{
                           width: `${task.progress}%`,
-                          background: task.status === "running" ? "#4F7DBD" : task.status === "success" ? "#4ADE80" : "#F87171",
+                          background: task.status === "running" ? "#163A70" : task.status === "success" ? "#16A34A" : "#DC2626",
                         }}
                       />
                     </div>
-                    <span style={{ fontSize: 11, color: "var(--dark-text-muted)", minWidth: 30 }}>{task.progress}%</span>
+                    <span style={{ fontSize: 11, color: "#6B7280", minWidth: 30 }}>{task.progress}%</span>
                   </div>
-                  <span style={{ fontSize: 11, color: "var(--dark-text-muted)" }}>解析 {fmt(task.total_found)} 条 · 失败页 {task.failed_pages}</span>
+                  <span style={{ fontSize: 11, color: "#6B7280" }}>解析 {fmt(task.total_found)} 条 · 失败页 {task.failed_pages}</span>
                 </div>
               ))}
             </div>
@@ -423,11 +428,11 @@ export function DashboardPage() {
               <div 
                 className="p-3 rounded-lg"
                 style={{ 
-                  background: "rgba(255, 255, 255, 0.03)", 
-                  border: "1px solid rgba(255, 255, 255, 0.08)"
+                  background: "#F8FAFC", 
+                  border: "1px solid #E5EAF2"
                 }}
               >
-                <p style={{ fontSize: 12, color: "var(--dark-text-primary)", lineHeight: 1.6 }}>
+                <p style={{ fontSize: 12, color: "#1F2937", lineHeight: 1.6 }}>
                   {topDistrict ? (
                     <>
                       <strong>{topDistrict.district}</strong>挂牌均价 {fmt(topDistrict.avg_unit_price)} 元/㎡，当前样本量 {fmt(topDistrict.listing_count)} 套。
@@ -440,11 +445,11 @@ export function DashboardPage() {
               <div 
                 className="p-3 rounded-lg"
                 style={{ 
-                  background: failedTaskCount > 0 ? "rgba(245, 158, 11, 0.1)" : "rgba(22, 163, 74, 0.1)", 
-                  border: `1px solid ${failedTaskCount > 0 ? "rgba(245, 158, 11, 0.3)" : "rgba(22, 163, 74, 0.3)"}`
+                  background: failedTaskCount > 0 ? "#FFFBEB" : "#F0FDF4", 
+                  border: `1px solid ${failedTaskCount > 0 ? "#FCD34D" : "#BBF7D0"}`
                 }}
               >
-                <p style={{ fontSize: 12, color: failedTaskCount > 0 ? "#FBBF24" : "#4ADE80", lineHeight: 1.6 }}>
+                <p style={{ fontSize: 12, color: failedTaskCount > 0 ? "#F59E0B" : "#16A34A", lineHeight: 1.6 }}>
                   {failedTaskCount > 0
                     ? `存在 ${failedTaskCount} 个失败或部分失败采集任务，建议进入日志页查看失败 URL 与错误类型。`
                     : "当前没有失败采集任务记录，可继续按区县做增量补采。"}
@@ -453,11 +458,11 @@ export function DashboardPage() {
               <div 
                 className="p-3 rounded-lg"
                 style={{ 
-                  background: "rgba(79, 125, 189, 0.1)", 
-                  border: "1px solid rgba(79, 125, 189, 0.2)" 
+                  background: "#EFF6FF", 
+                  border: "1px solid #BFDBFE" 
                 }}
               >
-                <p style={{ fontSize: 12, color: "#60A5FA", lineHeight: 1.6 }}>
+                <p style={{ fontSize: 12, color: "#1F4E8C", lineHeight: 1.6 }}>
                   已可用于分析的样本 {fmt(kpis?.analysis_ready_count ?? 0)} 条。模型指标、聚类画像和异常检测结果可在"分析建模"模块查看。
                 </p>
               </div>
@@ -465,16 +470,19 @@ export function DashboardPage() {
                 <Button 
                   size="sm" 
                   variant="outline" 
-                  className="dark-button"
-                  style={{ fontSize: 12, borderColor: "rgba(255, 255, 255, 0.1)" }} 
+                  style={{ fontSize: 12, borderColor: "#E5EAF2" }} 
                   onClick={() => navigate("/agent")}
                 >
                   生成报告
                 </Button>
                 <Button 
                   size="sm" 
-                  className="dark-button"
-                  style={{ background: "rgba(79, 125, 189, 0.3)", border: "1px solid rgba(79, 125, 189, 0.4)", fontSize: 12 }} 
+                  style={{ 
+                    background: "#163A70", 
+                    border: "1px solid #163A70",
+                    fontSize: 12,
+                    color: "#fff"
+                  }} 
                   onClick={() => navigate("/analysis")}
                 >
                   查看模型
