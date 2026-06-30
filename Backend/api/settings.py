@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from flask import Blueprint, request
+from flask import Blueprint, current_app, request
 
 from Backend.services.settings_service import SettingsService
+from Backend.tasks.scheduler import reconfigure_scheduler
 from Backend.utils.response import api_success
 
 
@@ -18,7 +19,9 @@ def get_settings():
 @bp.post("")
 def update_settings():
     payload = request.get_json(silent=True) or {}
-    return api_success(SettingsService.update_settings(payload))
+    settings = SettingsService.update_settings(payload)
+    reconfigure_scheduler(current_app._get_current_object())
+    return api_success(settings)
 
 
 @bp.post("/test-deepseek")

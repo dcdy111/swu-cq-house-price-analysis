@@ -33,8 +33,12 @@ export interface ListingItem {
   decoration?: string;
   floor_text?: string;
   floor_level?: string;
+  total_floors?: number;
   build_year?: number;
   house_age?: number;
+  metro_distance?: number;
+  building_type?: string;
+  has_elevator?: boolean;
   tags: string[];
   data_quality_score: number;
   status: string;
@@ -90,6 +94,8 @@ export interface CrawlTask {
   updated_count: number;
   unchanged_count: number;
   snapshot_count: number;
+  run_id?: string;
+  evidence?: Record<string, any>;
   progress: number;
   error_message?: string;
   started_at?: string;
@@ -213,6 +219,21 @@ export interface QualityReport {
   overview: QualityOverview;
   source_layers: SourceLayer[];
   quality_buckets: QualityBucket[];
+  dimension_scores: {
+    key: "completeness" | "uniqueness" | "consistency" | "timeliness" | "validity" | "verifiability";
+    label: string;
+    score: number;
+    weight: number;
+  }[];
+  methodology: {
+    framework: string;
+    purpose: string;
+    freshness_sla_days: number;
+    price_consistency_tolerance: number;
+    weights: Record<string, number>;
+    verifiability_note: string;
+    version: string;
+  };
   abnormal_samples: (ListingItem & { reason: string })[];
   cleaning_steps: CleaningStep[];
   analysis_policy: AnalysisPolicy;
@@ -280,11 +301,42 @@ export interface GeneratedReport {
 
 export interface AgentChatResponse {
   session_id: string;
+  turn_id: string;
   answer: string;
   tool_calls: AgentToolCall[];
   report?: GeneratedReport | null;
   thinking: string;
   model: string;
+  turn: AgentTurn;
+}
+
+export interface AgentTurn {
+  id: number;
+  turn_id: string;
+  session_id: string;
+  question: string;
+  answer?: string | null;
+  thinking?: string | null;
+  model?: string | null;
+  status: string;
+  tool_call_ids: number[];
+  tool_calls: AgentToolCall[];
+  report?: GeneratedReport | null;
+  report_id?: number | null;
+  created_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface AgentSessionSummary {
+  session_id: string;
+  title: string;
+  turn_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AgentSessionDetail extends AgentSessionSummary {
+  turns: AgentTurn[];
 }
 
 export interface DashboardKpis {
@@ -383,6 +435,36 @@ export interface DistrictMapResult {
   district_count: number;
   latest_updated_at?: string | null;
   metric_fields: Record<string, string>;
+}
+
+export interface DistrictValueProfileItem {
+  district: string;
+  value_index: number;
+  rank: number;
+  avg_unit_price: number;
+  listing_count: number;
+  avg_quality: number;
+  price_stability_score: number;
+  sample_score: number;
+  price_score: number;
+  quality_score: number;
+  dominant_layouts: { layout: string; count: number }[];
+  reasons: string[];
+  note: string;
+}
+
+export interface DistrictValueProfileResult {
+  items: DistrictValueProfileItem[];
+  methodology: {
+    name: string;
+    version: string;
+    formula: string;
+    price_advantage: string;
+    sample_score: string;
+    quality_score: string;
+    stability_score: string;
+    boundary: string;
+  };
 }
 
 export interface PriceDistributionItem {
@@ -545,6 +627,9 @@ export const api = {
   getDistrictMap() {
     return request<DistrictMapResult>("/api/charts/district-map");
   },
+  getDistrictValueProfile(limit = 8) {
+    return request<DistrictValueProfileResult>(`/api/charts/district-value-profile?limit=${limit}`);
+  },
   getPriceDistributionChart() {
     return request<PriceDistributionResult>("/api/charts/price-distribution");
   },
@@ -601,7 +686,7 @@ export const api = {
   getLatestAnalysisResultsByType() {
     return request<LatestAnalysisByType>("/api/analysis/results/latest-by-type");
   },
-  createAnalysisJob(payload: { job_type: "all" | "eda" | "regression" | "cluster" | "anomaly"; max_samples?: number }) {
+  createAnalysisJob(payload: { job_type: "all" | "eda" | "regression" | "tune" | "cluster" | "anomaly"; max_samples?: number }) {
     return request<AnalysisJob>("/api/analysis/jobs", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -615,6 +700,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+  getAgentSessions(limit = 50) {
+    return request<{ items: AgentSessionSummary[] }>(`/api/agent/sessions?limit=${limit}`);
+  },
+  getAgentSession(sessionId: string) {
+    return request<AgentSessionDetail>(`/api/agent/sessions/${encodeURIComponent(sessionId)}`);
   },
   getReport(reportId: number) {
     return request<GeneratedReport>(`/api/reports/${reportId}`);

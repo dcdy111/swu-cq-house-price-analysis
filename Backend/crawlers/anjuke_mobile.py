@@ -133,6 +133,10 @@ class AnjukeMobileCrawler(BaseCrawler):
             community=community,
             orientation=orientation,
             tags=tags,
+            metro_distance=self._extract_metro_distance(text),
+            building_type=self._extract_building_type(" ".join(desc_parts + tags)),
+            has_elevator=self._extract_has_elevator(" ".join(desc_parts + tags)),
+            total_floors=self._extract_total_floors(text),
         )
 
     def _parse_candidate(self, item, district: str, url: str) -> dict | None:
@@ -157,6 +161,10 @@ class AnjukeMobileCrawler(BaseCrawler):
             unit_price=unit_price,
             area=area,
             layout=layout,
+            metro_distance=self._extract_metro_distance(text),
+            building_type=None,
+            has_elevator=self._extract_has_elevator(text),
+            total_floors=self._extract_total_floors(text),
         )
 
     def _parse_image_alt_cards(self, soup: BeautifulSoup, district: str, url: str) -> list[dict]:
@@ -186,6 +194,10 @@ class AnjukeMobileCrawler(BaseCrawler):
                     unit_price=None,
                     area=area,
                     layout=layout,
+                    metro_distance=self._extract_metro_distance(text),
+                    building_type=None,
+                    has_elevator=self._extract_has_elevator(text),
+                    total_floors=self._extract_total_floors(text),
                 )
             )
         return results
@@ -204,6 +216,10 @@ class AnjukeMobileCrawler(BaseCrawler):
         community: str | None = None,
         orientation: str | None = None,
         tags: list[str] | None = None,
+        metro_distance: int | None = None,
+        building_type: str | None = None,
+        has_elevator: bool | None = None,
+        total_floors: int | None = None,
     ) -> dict:
         return {
             "source": self.source_key,
@@ -220,7 +236,11 @@ class AnjukeMobileCrawler(BaseCrawler):
             "orientation": orientation,
             "decoration": None,
             "floor_text": None,
+            "total_floors": total_floors,
             "build_year": None,
+            "metro_distance": metro_distance,
+            "building_type": building_type,
+            "has_elevator": has_elevator,
             "tags": (tags or [])[:8],
             "status": "active",
         }
@@ -284,3 +304,34 @@ class AnjukeMobileCrawler(BaseCrawler):
     def _source_id_from_link(link: str) -> str | None:
         match = re.search(r"(\d{6,})", link)
         return match.group(1) if match else None
+
+    @staticmethod
+    def _extract_total_floors(text: str | None) -> int | None:
+        match = re.search(r"共\s*(\d+)\s*层", text or "")
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _extract_metro_distance(text: str | None) -> int | None:
+        match = re.search(r"距.{0,40}?(\d+(?:\.\d+)?)\s*(米|m|km|公里)", text or "", re.IGNORECASE)
+        if not match:
+            return None
+        distance = float(match.group(1))
+        unit = match.group(2).lower()
+        return int(round(distance * 1000)) if unit in {"km", "公里"} else int(round(distance))
+
+    @staticmethod
+    def _extract_building_type(text: str | None) -> str | None:
+        merged = text or ""
+        for keyword in ("板楼", "塔楼", "别墅", "洋房", "平房", "板塔结合"):
+            if keyword in merged:
+                return keyword
+        return None
+
+    @staticmethod
+    def _extract_has_elevator(text: str | None) -> bool | None:
+        merged = text or ""
+        if "无电梯" in merged:
+            return False
+        if "有电梯" in merged or "电梯房" in merged:
+            return True
+        return None

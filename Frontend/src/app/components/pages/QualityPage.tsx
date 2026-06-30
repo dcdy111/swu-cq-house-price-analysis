@@ -167,6 +167,31 @@ export function QualityPage() {
         />
       </div>
 
+      <SectionCard
+        title="六维数据质量评分"
+        subtitle={`${report.methodology.framework} · ${report.methodology.version} · 总分按业务用途加权`}
+      >
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+          {report.dimension_scores.map(item => (
+            <div key={item.key} className="rounded-xl p-3" style={{ background: "#F7F9FC", border: "1px solid #E5EAF2" }}>
+              <div className="flex items-center justify-between gap-2">
+                <span style={{ fontSize: 12, color: "#6B7280" }}>{item.label}</span>
+                <span style={{ fontSize: 10, color: "#9CA3AF" }}>权重 {Math.round(item.weight * 100)}%</span>
+              </div>
+              <div style={{ color: item.score >= 80 ? "#163A70" : item.score >= 60 ? "#E67E22" : "#DC2626", fontSize: 24, fontWeight: 700, marginTop: 8 }}>
+                {fmt(item.score, 1)}
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ background: "#E5EAF2" }}>
+                <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, item.score))}%`, background: item.score >= 80 ? "#4F7DBD" : "#E67E22" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 rounded-lg px-3 py-2" style={{ background: "#FFFBEB", border: "1px solid #FDE68A", color: "#92400E", fontSize: 12, lineHeight: 1.7 }}>
+          {report.methodology.verifiability_note}
+        </div>
+      </SectionCard>
+
       <SectionCard title="当前分析口径" subtitle="后续分析默认按质量分与来源层级筛选，而不是直接相信旧库">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 flex flex-col gap-3">
@@ -180,7 +205,9 @@ export function QualityPage() {
               </span>
             </div>
             <p style={{ color: "#1F2937", fontSize: 13, lineHeight: 1.8 }}>
-              当前新标准样本还未达到 50,000 条，因此系统采用“旧库冷启动 + 新爬样本校验”的混合口径。
+              {overview.strict_new_standard_count >= 50_000
+                ? "当前新标准可用样本已达到 50,000 条，分析默认采用新标准样本优先口径。"
+                : "当前新标准可用样本尚未达到 50,000 条，系统采用旧库冷启动与新爬样本校验的混合口径。"}
               旧库不删除，但所有分析、建模和报告都必须显示来源层级，并默认过滤低质量、字段缺失和异常区间样本。
             </p>
           </div>

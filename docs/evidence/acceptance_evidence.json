@@ -1,146 +1,148 @@
 {
-  "generated_at": "2026-06-18 11:40:16",
+  "generated_at": "2026-06-30 14:56:57",
   "database": {
-    "listings_total": 122316,
-    "valid_listings": 122316,
-    "district_count": 38,
+    "listings_total": 50708,
+    "valid_listings": 50708,
+    "district_count": 37,
     "source_counts": {
-      "anjuke_legacy": 118661,
-      "lianjia_legacy": 3116,
-      "fang": 539
+      "fang": 50708
     },
     "top_district_counts": {
-      "沙坪坝": 14155,
-      "南岸": 13799,
-      "渝北": 13782,
-      "江北": 9437,
-      "九龙坡": 9335,
-      "渝中": 7370,
-      "巴南": 6851,
-      "潼南": 5948,
-      "开州": 5713,
-      "大足": 5574
+      "北碚": 4451,
+      "璧山": 4415,
+      "大渡口": 4196,
+      "渝中": 4161,
+      "江津": 4139,
+      "巴南": 4046,
+      "沙坪坝": 3958,
+      "南岸": 3909,
+      "两江新区": 3862,
+      "九龙坡": 3779
     },
-    "snapshots": 122317,
-    "listings_with_multiple_snapshots": 1
+    "snapshots": 50708,
+    "listings_with_multiple_snapshots": 0,
+    "structure_field_non_null_counts": {
+      "metro_distance": 1,
+      "building_type": 0,
+      "has_elevator": 0,
+      "total_floors": 0
+    },
+    "structure_field_note": "结构增强字段只统计源页面明确出现并被爬虫解析出的值；缺失保持 NULL，不做标题、地址、标签二次猜测。"
   },
   "quality": {
-    "id": 3,
-    "report_type": "non_deploy_closure",
-    "total_count": 122316,
-    "valid_count": 122316,
-    "analysis_ready_count": 122288,
-    "avg_quality": 100.0,
-    "missing_count": 0,
-    "extreme_count": 28,
-    "low_quality_count": 3,
-    "snapshot_count": 122317,
+    "id": 6,
+    "report_type": "six_dimension_v2",
+    "total_count": 50702,
+    "valid_count": 50701,
+    "analysis_ready_count": 50385,
+    "avg_quality": 99.87,
+    "missing_count": 1,
+    "extreme_count": 317,
+    "low_quality_count": 0,
+    "snapshot_count": 50702,
     "summary": {
-      "recommended_mode": "hybrid_cold_start",
-      "recommended_mode_label": "冷启动混合基线",
-      "source_layer_count": 3,
+      "recommended_mode": "new_standard_primary",
+      "recommended_mode_label": "新标准样本优先",
+      "source_layer_count": 1,
       "abnormal_sample_count": 8
     },
-    "created_at": "2026-06-18 02:51:20"
+    "created_at": "2026-06-30 03:22:30"
   },
   "analysis_job": {
-    "id": 9,
+    "id": 10,
     "job_type": "all",
     "status": "success",
     "sample_count": 5000,
-    "train_count": 3692,
-    "test_count": 924,
+    "train_count": 3184,
+    "test_count": 797,
     "error_message": null,
-    "started_at": "2026-06-18 02:51:31",
-    "finished_at": "2026-06-18 02:51:49",
-    "created_at": "2026-06-18 02:51:31",
-    "updated_at": "2026-06-18 02:51:49"
+    "started_at": "2026-06-26 04:52:59",
+    "finished_at": "2026-06-26 04:53:15",
+    "created_at": "2026-06-26 04:52:59",
+    "updated_at": "2026-06-26 04:53:15"
   },
   "model_results": {
     "eda": {
       "model_name": "EDA 描述性统计",
       "metrics": {
         "sample_count": 5000,
-        "district_count": 38,
-        "avg_unit_price": 9629.72,
-        "median_unit_price": 9984.5,
-        "avg_total_price": 98.7,
-        "avg_area": 102.82,
-        "sampling_district_count": 38,
-        "sampling_source_count": 3
+        "district_count": 37,
+        "avg_unit_price": 9228.8,
+        "median_unit_price": 7973.0,
+        "avg_total_price": 113.97,
+        "avg_area": 110.94,
+        "sampling_district_count": 37,
+        "sampling_source_count": 1
       },
       "sampling": {
         "strategy": "district_stratified_deterministic",
-        "district_count": 38,
-        "source_count": 3,
+        "district_count": 37,
+        "source_count": 1,
         "source_distribution": {
-          "anjuke_legacy": 4852,
-          "fang": 23,
-          "lianjia_legacy": 125
+          "fang": 5000
         }
       }
     },
     "regression": {
-      "model_name": "RandomForestRegressor 集成树",
-      "metrics": {
-        "status": "ok",
-        "target": "unit_price",
-        "target_label": "挂牌单价（元/平方米）",
-        "sample_count": 5000,
-        "training_sample_count": 4616,
-        "excluded_count": 384,
-        "train_count": 3692,
-        "test_count": 924,
-        "feature_count": 68,
-        "mae": 1166.21,
-        "rmse": 1598.61,
-        "r2": 0.7105,
-        "mape": 13.95,
-        "rank": 1,
-        "is_best": true,
-        "sampling_district_count": 38,
-        "sampling_source_count": 3
-      },
-      "sampling": {
-        "strategy": "district_stratified_deterministic",
-        "district_count": 38,
-        "source_count": 3,
-        "source_distribution": {
-          "anjuke_legacy": 4852,
-          "fang": 23,
-          "lianjia_legacy": 125
-        }
-      }
-    },
-    "regression_candidate": {
       "model_name": "GradientBoostingRegressor GBDT",
       "metrics": {
         "status": "ok",
         "target": "unit_price",
         "target_label": "挂牌单价（元/平方米）",
         "sample_count": 5000,
-        "training_sample_count": 4616,
-        "excluded_count": 384,
-        "train_count": 3692,
-        "test_count": 924,
-        "feature_count": 68,
-        "mae": 1395.39,
-        "rmse": 1771.35,
-        "r2": 0.6446,
-        "mape": 16.39,
-        "rank": 4,
-        "is_best": false,
-        "sampling_district_count": 38,
-        "sampling_source_count": 3
+        "training_sample_count": 3981,
+        "excluded_count": 1019,
+        "train_count": 3184,
+        "test_count": 797,
+        "feature_count": 63,
+        "mae": 1595.28,
+        "rmse": 2239.21,
+        "r2": 0.628,
+        "mape": 20.8,
+        "rank": 1,
+        "is_best": true,
+        "sampling_district_count": 37,
+        "sampling_source_count": 1
       },
       "sampling": {
         "strategy": "district_stratified_deterministic",
-        "district_count": 38,
-        "source_count": 3,
+        "district_count": 37,
+        "source_count": 1,
         "source_distribution": {
-          "anjuke_legacy": 4852,
-          "fang": 23,
-          "lianjia_legacy": 125
+          "fang": 5000
+        }
+      }
+    },
+    "regression_candidate": {
+      "model_name": "SourceSegmentedRandomForest 来源分层模型",
+      "metrics": {
+        "status": "ok",
+        "target": "unit_price",
+        "target_label": "挂牌单价（元/平方米）",
+        "sample_count": 5000,
+        "training_sample_count": 3184,
+        "excluded_count": 1019,
+        "train_count": 3184,
+        "test_count": 797,
+        "feature_count": 63,
+        "source_segment_count": 1,
+        "segment_min_train_count": 30,
+        "fallback_prediction_count": 0,
+        "mae": 1650.01,
+        "rmse": 2322.16,
+        "r2": 0.5999,
+        "mape": 22.02,
+        "rank": 4,
+        "is_best": false,
+        "sampling_district_count": 37,
+        "sampling_source_count": 1
+      },
+      "sampling": {
+        "strategy": "district_stratified_deterministic",
+        "district_count": 37,
+        "source_count": 1,
+        "source_distribution": {
+          "fang": 5000
         }
       }
     },
@@ -149,25 +151,23 @@
       "metrics": {
         "status": "ok",
         "sample_count": 5000,
-        "cluster_count": 4,
-        "silhouette_score": 0.2848,
+        "cluster_count": 2,
+        "silhouette_score": 0.656,
         "candidate_k": [
           2,
           3,
           4
         ],
         "algorithm": "sklearn.cluster.KMeans",
-        "sampling_district_count": 38,
-        "sampling_source_count": 3
+        "sampling_district_count": 37,
+        "sampling_source_count": 1
       },
       "sampling": {
         "strategy": "district_stratified_deterministic",
-        "district_count": 38,
-        "source_count": 3,
+        "district_count": 37,
+        "source_count": 1,
         "source_distribution": {
-          "anjuke_legacy": 4852,
-          "fang": 23,
-          "lianjia_legacy": 125
+          "fang": 5000
         }
       }
     },
@@ -176,63 +176,31 @@
       "metrics": {
         "status": "ok",
         "sample_count": 5000,
-        "anomaly_count": 123,
-        "anomaly_rate": 0.0246,
+        "anomaly_count": 157,
+        "anomaly_rate": 0.0314,
         "model_anomaly_count": 100,
-        "strong_rule_count": 47,
+        "strong_rule_count": 131,
         "contamination": 0.02,
         "threshold_deviation_rate": 50,
         "threshold_z_score": 2.5,
         "algorithm": "sklearn.ensemble.IsolationForest",
-        "sampling_district_count": 38,
-        "sampling_source_count": 3
+        "sampling_district_count": 37,
+        "sampling_source_count": 1
       },
       "sampling": {
         "strategy": "district_stratified_deterministic",
-        "district_count": 38,
-        "source_count": 3,
+        "district_count": 37,
+        "source_count": 1,
         "source_distribution": {
-          "anjuke_legacy": 4852,
-          "fang": 23,
-          "lianjia_legacy": 125
+          "fang": 5000
         }
       }
     }
   },
   "crawl_tasks": [
     {
-      "id": 6,
-      "name": "非部署收口-房天下6区重复采集验证",
-      "source": "fang",
-      "mode": "manual_incremental",
-      "status": "partial_failed",
-      "total_pages": 6,
-      "success_pages": 3,
-      "failed_pages": 3,
-      "total_found": 180,
-      "inserted_count": 27,
-      "updated_count": 0,
-      "unchanged_count": 153,
-      "snapshot_count": 0
-    },
-    {
-      "id": 5,
-      "name": "非部署收口-房天下6区增量采集",
-      "source": "fang",
-      "mode": "manual_incremental",
-      "status": "success",
-      "total_pages": 6,
-      "success_pages": 6,
-      "failed_pages": 0,
-      "total_found": 360,
-      "inserted_count": 360,
-      "updated_count": 0,
-      "unchanged_count": 0,
-      "snapshot_count": 0
-    },
-    {
-      "id": 4,
-      "name": "答辩证据-fang-渝中-拦截识别",
+      "id": 55,
+      "name": "字段补爬-两江新区1页-1782799497",
       "source": "fang",
       "mode": "manual",
       "status": "success",
@@ -240,44 +208,59 @@
       "success_pages": 1,
       "failed_pages": 0,
       "total_found": 60,
-      "inserted_count": 2,
+      "inserted_count": 6,
       "updated_count": 0,
-      "unchanged_count": 58,
+      "unchanged_count": 54,
       "snapshot_count": 0
     },
     {
-      "id": 3,
-      "name": "答辩证据-fang-渝中-1页",
+      "id": 54,
+      "name": "定时增量验收任务",
       "source": "fang",
-      "mode": "manual",
+      "mode": "scheduled_incremental",
       "status": "success",
       "total_pages": 1,
       "success_pages": 1,
       "failed_pages": 0,
       "total_found": 60,
-      "inserted_count": 30,
-      "updated_count": 1,
-      "unchanged_count": 29,
-      "snapshot_count": 1
-    },
-    {
-      "id": 2,
-      "name": "答辩证据-fang-两江新区-1页",
-      "source": "fang",
-      "mode": "manual",
-      "status": "success",
-      "total_pages": 1,
-      "success_pages": 1,
-      "failed_pages": 0,
-      "total_found": 60,
-      "inserted_count": 60,
+      "inserted_count": 5,
       "updated_count": 0,
-      "unchanged_count": 0,
+      "unchanged_count": 55,
       "snapshot_count": 0
     },
     {
-      "id": 1,
-      "name": "房天下小规模试采集",
+      "id": 53,
+      "name": "定时增量验收任务",
+      "source": "fang",
+      "mode": "scheduled_incremental",
+      "status": "success",
+      "total_pages": 1,
+      "success_pages": 1,
+      "failed_pages": 0,
+      "total_found": 60,
+      "inserted_count": 5,
+      "updated_count": 0,
+      "unchanged_count": 55,
+      "snapshot_count": 0
+    },
+    {
+      "id": 52,
+      "name": "定时增量验收任务",
+      "source": "fang",
+      "mode": "scheduled_incremental",
+      "status": "success",
+      "total_pages": 1,
+      "success_pages": 1,
+      "failed_pages": 0,
+      "total_found": 60,
+      "inserted_count": 11,
+      "updated_count": 0,
+      "unchanged_count": 49,
+      "snapshot_count": 0
+    },
+    {
+      "id": 51,
+      "name": "UI去重验收-渝中1页-1782456813134-repeat",
       "source": "fang",
       "mode": "manual",
       "status": "success",
@@ -285,105 +268,121 @@
       "success_pages": 1,
       "failed_pages": 0,
       "total_found": 60,
-      "inserted_count": 60,
+      "inserted_count": 0,
       "updated_count": 0,
-      "unchanged_count": 0,
+      "unchanged_count": 60,
+      "snapshot_count": 0
+    },
+    {
+      "id": 50,
+      "name": "UI去重验收-渝中1页-1782456813134",
+      "source": "fang",
+      "mode": "manual",
+      "status": "success",
+      "total_pages": 1,
+      "success_pages": 1,
+      "failed_pages": 0,
+      "total_found": 60,
+      "inserted_count": 4,
+      "updated_count": 0,
+      "unchanged_count": 56,
       "snapshot_count": 0
     }
   ],
   "agent": {
-    "tool_call_count": 25,
-    "generated_report_count": 5,
+    "tool_call_count": 51,
+    "generated_report_count": 8,
     "latest_report": {
-      "id": 5,
+      "id": 8,
       "title": "重庆二手房挂牌价市场分析报告",
-      "question": "请基于当前市场数据和最新模型生成一份答辩用挂牌价分析报告。",
-      "created_at": "2026-06-18 02:53:07",
+      "question": "帮我生成市场分析报告，说明当前样本量和整体均价",
+      "created_at": "2026-06-26 06:53:49",
       "evidence_keys": [
+        "agent_runtime",
         "market",
         "model"
       ]
     },
     "recent_calls": [
       {
-        "id": 25,
-        "tool_name": "get_model_result",
+        "id": 51,
+        "tool_name": "recommend_buy_options",
         "status": "success",
-        "question": "最新挂牌价模型的 MAE、RMSE、R² 和最重要的五个特征是什么？",
-        "duration_ms": 6,
-        "created_at": "2026-06-18 02:54:41"
+        "question": "预算150万，两江新区，优先近地铁，推荐几套候选房源",
+        "duration_ms": 127,
+        "created_at": "2026-06-30 06:04:35"
       },
       {
-        "id": 24,
+        "id": 50,
+        "tool_name": "recommend_buy_options",
+        "status": "success",
+        "question": "预算150万，两江新区，优先近地铁，推荐几套候选房源",
+        "duration_ms": 138,
+        "created_at": "2026-06-30 06:04:02"
+      },
+      {
+        "id": 49,
+        "tool_name": "get_chart_series",
+        "status": "success",
+        "question": "近12月重庆房价走势如何？",
+        "duration_ms": 49,
+        "created_at": "2026-06-30 01:22:23"
+      },
+      {
+        "id": 48,
         "tool_name": "query_market_stats",
         "status": "success",
-        "question": "最新挂牌价模型的 MAE、RMSE、R² 和最重要的五个特征是什么？",
-        "duration_ms": 1671,
-        "created_at": "2026-06-18 02:54:41"
+        "question": "近12月重庆房价走势如何？",
+        "duration_ms": 889,
+        "created_at": "2026-06-30 01:22:23"
       },
       {
-        "id": 23,
+        "id": 47,
+        "tool_name": "query_market_stats",
+        "status": "success",
+        "question": "渝北区平均挂牌价是多少？请给出关键证据。",
+        "duration_ms": 559,
+        "created_at": "2026-06-29 05:06:32"
+      },
+      {
+        "id": 46,
+        "tool_name": "query_market_stats",
+        "status": "success",
+        "question": "渝北区平均挂牌价是多少？请给出关键证据。",
+        "duration_ms": 697,
+        "created_at": "2026-06-29 05:03:21"
+      },
+      {
+        "id": 45,
+        "tool_name": "query_market_stats",
+        "status": "success",
+        "question": "渝北区的均价是多少？",
+        "duration_ms": 631,
+        "created_at": "2026-06-29 04:41:09"
+      },
+      {
+        "id": 44,
+        "tool_name": "query_market_stats",
+        "status": "success",
+        "question": "重庆整体均价和样本量是多少？",
+        "duration_ms": 657,
+        "created_at": "2026-06-26 06:53:53"
+      },
+      {
+        "id": 43,
         "tool_name": "generate_report",
         "status": "success",
-        "question": "请基于当前市场数据和最新模型生成一份答辩用挂牌价分析报告。",
-        "duration_ms": 6,
-        "created_at": "2026-06-18 02:53:07"
+        "question": "帮我生成市场分析报告，说明当前样本量和整体均价",
+        "duration_ms": 15,
+        "created_at": "2026-06-26 06:53:49"
       },
       {
-        "id": 22,
+        "id": 42,
         "tool_name": "get_model_result",
         "status": "success",
-        "question": "请基于当前市场数据和最新模型生成一份答辩用挂牌价分析报告。",
-        "duration_ms": 4,
-        "created_at": "2026-06-18 02:53:07"
-      },
-      {
-        "id": 21,
-        "tool_name": "query_market_stats",
-        "status": "success",
-        "question": "请基于当前市场数据和最新模型生成一份答辩用挂牌价分析报告。",
-        "duration_ms": 1566,
-        "created_at": "2026-06-18 02:53:07"
-      },
-      {
-        "id": 20,
-        "tool_name": "get_model_result",
-        "status": "success",
-        "question": "最新挂牌价模型的 MAE、RMSE、R² 和主要特征是什么？",
-        "duration_ms": 7,
-        "created_at": "2026-06-18 02:52:54"
-      },
-      {
-        "id": 19,
-        "tool_name": "query_market_stats",
-        "status": "success",
-        "question": "最新挂牌价模型的 MAE、RMSE、R² 和主要特征是什么？",
-        "duration_ms": 1527,
-        "created_at": "2026-06-18 02:52:54"
-      },
-      {
-        "id": 18,
-        "tool_name": "query_market_stats",
-        "status": "success",
-        "question": "重庆市当前有效房源总数和挂牌均价是多少？",
-        "duration_ms": 1561,
-        "created_at": "2026-06-18 02:52:49"
-      },
-      {
-        "id": 17,
-        "tool_name": "query_market_stats",
-        "status": "success",
-        "question": "渝北区均价是多少？",
-        "duration_ms": 1538,
-        "created_at": "2026-06-12 14:14:21"
-      },
-      {
-        "id": 16,
-        "tool_name": "query_market_stats",
-        "status": "success",
-        "question": "渝北区均价是多少？",
-        "duration_ms": 1458,
-        "created_at": "2026-06-12 13:47:29"
+        "question": "帮我生成市场分析报告，说明当前样本量和整体均价",
+        "duration_ms": 8,
+        "created_at": "2026-06-26 06:53:49"
       }
     ]
   },
@@ -398,43 +397,50 @@
       "path": "/api/overview",
       "status": 200,
       "code": 0,
-      "duration_ms": 977.06
+      "duration_ms": 485.2
     },
     {
       "path": "/api/charts/district-price",
       "status": 200,
       "code": 0,
-      "duration_ms": 241.62
+      "duration_ms": 112.25
+    },
+    {
+      "path": "/api/charts/district-value-profile",
+      "status": 200,
+      "code": 0,
+      "duration_ms": 200.19
     },
     {
       "path": "/api/charts/price-distribution",
       "status": 200,
       "code": 0,
-      "duration_ms": 317.26
+      "duration_ms": 175.91
     },
     {
       "path": "/api/charts/price-trend",
       "status": 200,
       "code": 0,
-      "duration_ms": 96.85
+      "duration_ms": 42.98
     },
     {
       "path": "/api/charts/area-price-scatter?limit=500",
       "status": 200,
       "code": 0,
-      "duration_ms": 64.94
+      "duration_ms": 29.21
     },
     {
       "path": "/api/charts/layout-distribution",
       "status": 200,
       "code": 0,
-      "duration_ms": 152.53
+      "duration_ms": 81.72
     }
   ],
   "verification": {
     "compileall": "passed",
-    "pytest": "34 passed",
+    "pytest": "55 passed",
     "frontend_build": "passed",
-    "frontend_bundle_kb": 2103.81
+    "frontend_bundle_kb": 2122.88,
+    "readonly_playwright": "passed"
   }
 }

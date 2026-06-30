@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from uuid import uuid4
 
 from Backend.agent.deepseek_client import DeepSeekClient
 from Backend.agent.tool_registry import ToolRegistry
 from Backend.extensions import db
-from Backend.models.agent import AgentToolCall, GeneratedReport
+from Backend.models.agent import AgentSession, AgentToolCall, AgentTurn, GeneratedReport
 
 
 DISTRICT_KEYWORDS = [
@@ -57,6 +58,17 @@ class AgentService:
         if not question:
             raise ValueError("question 不能为空")
         session_id = str(payload.get("session_id") or f"agent-{uuid4().hex[:10]}")
+        turn_id = f"turn-{uuid4().hex[:12]}"
+        session = self._ensure_session(session_id, question)
+        turn = AgentTurn(
+            turn_id=turn_id,
+            session_id=session_id,
+            question=question,
+            status="running",
+            created_at=datetime.utcnow(),
+        )
+        db.session.add(turn)
+        db.session.commit()
 
         plan = self._plan_tools(question, session_id)
         tool_calls = []
@@ -75,14 +87,50 @@ class AgentService:
         answer, model_name = DeepSeekClient.generate_answer(question, evidence, fallback_answer)
         answer = self._ensure_answer_sections(answer, fallback_answer)
         self._persist_report_runtime(evidence, tool_calls, model_name, answer)
+        thinking_summary = self._execution_summary(tool_calls)
+        report_id = ((evidence.get("report") or {}).get("report") or {}).get("id")
+        turn.answer = answer
+        turn.thinking_summary = thinking_summary
+        turn.model_name = model_name
+        turn.status = "success"
+        turn.report_id = int(report_id) if report_id else None
+        turn.finished_at = datetime.utcnow()
+        turn.set_tool_call_ids([int(item["id"]) for item in tool_calls if item.get("id")])
+        session.updated_at = turn.finished_at
+        db.session.commit()
         return {
             "session_id": session_id,
+            "turn_id": turn_id,
             "answer": answer,
             "tool_calls": tool_calls,
             "report": evidence.get("report", {}).get("report"),
-            "thinking": self._execution_summary(tool_calls),
+            "thinking": thinking_summary,
             "model": model_name,
+            "turn": turn.to_dict(include_tool_calls=True),
         }
+
+    @staticmethod
+    def _ensure_session(session_id: str, question: str) -> AgentSession:
+        session = db.session.get(AgentSession, session_id)
+        if session is None:
+            session = AgentSession(
+                session_id=session_id,
+                title=question[:32] or "新的市场问数",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            db.session.add(session)
+            db.session.commit()
+        return session
+
+    @staticmethod
+    def list_sessions(limit: int = 50) -> dict:
+        rows = AgentSession.query.order_by(AgentSession.updated_at.desc()).limit(min(100, max(1, limit))).all()
+        return {"items": [row.to_dict(include_turns=False) for row in rows]}
+
+    @staticmethod
+    def get_session(session_id: str) -> AgentSession | None:
+        return db.session.get(AgentSession, session_id)
 
     @staticmethod
     def _persist_report_runtime(evidence: dict, tool_calls: list[dict], model_name: str, answer: str) -> None:
@@ -203,16 +251,11 @@ class AgentService:
         wants_crawl = any(word in question for word in ["采集", "爬虫", "补采", "任务", "日志", "失败页"])
         wants_model = any(word in question for word in ["模型", "mae", "rmse", "r²", "r2", "特征", "聚类", "异常", "预测"])
         wants_trend = any(word in question for word in ["趋势", "走势", "近12月", "图表", "分布"])
-        wants_crawl_create = any(word in question for word in ["创建采集", "执行补采", "增量采集", "按区补采"])
-
-        if wants_crawl_create:
-            plan.append(
-                {
-                    "tool": "run_incremental_crawl",
-                    "args": {"source": "fang", "districts": [district] if district else [], "max_pages": 1, "max_workers": 3},
-                }
-            )
-        elif wants_crawl:
+        wants_recommendation = any(
+            word in question
+            for word in ["推荐", "买房", "置业", "性价比", "通勤", "预算", "刚工作", "首套", "适合", "候选"]
+        )
+        if wants_crawl:
             plan.append({"tool": "get_crawl_status", "args": {"limit": 10}})
 
         if wants_trend:
@@ -221,11 +264,11 @@ class AgentService:
         if wants_model or wants_report:
             plan.append({"tool": "get_model_result", "args": {}})
 
+        if wants_recommendation:
+            plan.append({"tool": "recommend_buy_options", "args": self._extract_buyer_preferences(question, district)})
+
         if wants_report or not plan or any(word in question for word in ["均价", "价格", "区县", "市场", "房价", "挂牌价"]):
             plan.insert(0, {"tool": "query_market_stats", "args": {"district": district, "limit": 20}})
-
-        if "执行分析" in question or "重新分析" in question or "启动分析" in question:
-            plan.append({"tool": "run_analysis_job", "args": {"job_type": "all", "max_samples": 3000}})
 
         if wants_report:
             plan.append(
@@ -264,6 +307,7 @@ class AgentService:
     def _evidence_key(tool_name: str) -> str:
         return {
             "query_market_stats": "market",
+            "recommend_buy_options": "buyer_options",
             "get_chart_series": "chart",
             "get_crawl_status": "crawl",
             "run_incremental_crawl": "crawl_task",
@@ -274,6 +318,7 @@ class AgentService:
 
     def _compose_answer(self, question: str, evidence: dict, tool_calls: list[dict]) -> str:
         market = evidence.get("market") or {}
+        buyer_options = evidence.get("buyer_options") or {}
         model = evidence.get("model") or {}
         crawl = evidence.get("crawl") or {}
         report = evidence.get("report") or {}
@@ -324,6 +369,20 @@ class AgentService:
                 ]
             )
 
+        if buyer_options:
+            return "\n".join(
+                [
+                    "**结论**",
+                    self._buyer_conclusion(buyer_options),
+                    "",
+                    "**关键证据**",
+                    self._buyer_evidence_lines(buyer_options, market),
+                    "",
+                    "**可执行建议**",
+                    self._buyer_suggestion(buyer_options),
+                ]
+            )
+
         return "\n".join(
             [
                 "**结论**",
@@ -342,12 +401,15 @@ class AgentService:
     def _market_conclusion(market: dict) -> str:
         overview = market.get("overview") or {}
         districts = market.get("district_items") or []
+        requested_district = (market.get("query") or {}).get("requested_district")
         if districts:
             item = districts[0]
             return (
                 f"{item.get('district')} 当前平均挂牌单价为 {item.get('avg_unit_price', 0)} 元/平方米，"
                 f"样本量 {item.get('listing_count', 0)} 套。"
             )
+        if requested_district:
+            return f"当前数据中未查询到 {requested_district} 的有效房源，不能用全市均价替代该区县挂牌价。"
         if overview:
             return (
                 f"当前有效房源 {overview.get('active_count', 0)} 套，"
@@ -359,6 +421,20 @@ class AgentService:
     def _market_evidence_line(market: dict) -> str:
         overview = market.get("overview") or {}
         top = market.get("top_district") or {}
+        districts = market.get("district_items") or []
+        requested_district = (market.get("query") or {}).get("requested_district")
+        if requested_district and districts:
+            item = districts[0]
+            return (
+                f"- 区县统计：{item.get('district')} 有效样本 {item.get('listing_count', 0)} 套，"
+                f"平均挂牌单价 {item.get('avg_unit_price', 0)} 元/平方米，"
+                f"平均挂牌总价 {item.get('avg_total_price', 0)} 万元。"
+            )
+        if requested_district:
+            return (
+                f"- 区县统计：工具返回 {requested_district} 匹配结果为 0 条；"
+                f"全市有效样本 {overview.get('active_count', 0)} 套仅作数据覆盖说明，不作为该区县挂牌价。"
+            )
         if not overview:
             return "- 市场统计工具未返回有效数据。"
         return (
@@ -366,6 +442,52 @@ class AgentService:
             f"平均挂牌单价 {overview.get('avg_unit_price', 0)} 元/平方米，"
             f"区县覆盖 {overview.get('district_count', 0)} 个；"
             f"当前高位区县 {top.get('district', '暂无')}。"
+        )
+
+    @staticmethod
+    def _buyer_conclusion(buyer_options: dict) -> str:
+        items = buyer_options.get("items") or []
+        summary = buyer_options.get("summary") or {}
+        query = buyer_options.get("query") or {}
+        if not items:
+            budget_max = query.get("budget_max")
+            district = query.get("district")
+            if budget_max:
+                return f"当前条件下没有检索到符合预算上限 {budget_max} 万元的候选房源。"
+            if district:
+                return f"当前条件下没有检索到 {district} 的候选房源。"
+            return "当前条件下没有检索到可推荐的候选房源。"
+        top_item = items[0]
+        listing = top_item.get("listing") or {}
+        return (
+            f"按当前预算与偏好，优先推荐 {listing.get('district')}·{listing.get('community') or listing.get('title')}，"
+            f"综合推荐分 {top_item.get('recommendation_score')}，在 {summary.get('matched_count', 0)} 套候选中排序靠前。"
+        )
+
+    @staticmethod
+    def _buyer_evidence_lines(buyer_options: dict, market: dict) -> str:
+        items = buyer_options.get("items") or []
+        summary = buyer_options.get("summary") or {}
+        query = buyer_options.get("query") or {}
+        if not items:
+            return (
+                f"- 候选检索结果：匹配 0 套；当前条件包括预算上限 {query.get('budget_max') or '未限定'} 万元、"
+                f"面积下限 {query.get('area_min') or '未限定'} 平方米。"
+            )
+        top_item = items[0]
+        listing = top_item.get("listing") or {}
+        breakdown = top_item.get("score_breakdown") or {}
+        commute_proxy = top_item.get("commute_proxy") or {}
+        districts = "、".join(summary.get("district_mix") or []) or "暂无"
+        market_line = AgentService._market_evidence_line(market) if market else "- 本轮未额外请求全市市场统计。"
+        return "\n".join(
+            [
+                f"- 候选房源：{listing.get('title')}，挂牌总价 {listing.get('total_price')} 万元，挂牌单价 {listing.get('unit_price')} 元/平方米，面积 {listing.get('area')} 平方米。",
+                f"- 推荐评分：预算匹配 {breakdown.get('budget_fit')}，面积匹配 {breakdown.get('area_fit')}，通勤便利代理 {breakdown.get('commute_proxy')}，质量分 {breakdown.get('quality')}。",
+                f"- 通勤代理说明：{commute_proxy.get('label')}；{summary.get('commute_note')}",
+                f"- 候选覆盖：共匹配 {summary.get('matched_count', 0)} 套，主要分布在 {districts}。",
+                market_line,
+            ]
         )
 
     @staticmethod
@@ -409,6 +531,40 @@ class AgentService:
         if market.get("overview", {}).get("active_count", 0) == 0:
             return "先执行冷启动导入或增量采集，再进行 Dashboard、模型和 Agent 演示。"
         return "答辩时可把右侧工具调用 input/output 作为 Agent 未编造数值的证据。"
+
+    @staticmethod
+    def _buyer_suggestion(buyer_options: dict) -> str:
+        items = buyer_options.get("items") or []
+        query = buyer_options.get("query") or {}
+        if not items:
+            return "可适当放宽预算、面积或区县条件后重试，并优先补充带近地铁标签和更新更近的房源。"
+        top_item = items[0]
+        listing = top_item.get("listing") or {}
+        reasons = "；".join(top_item.get("reasons") or [])
+        district = listing.get("district")
+        budget_max = query.get("budget_max")
+        return (
+            f"可先重点查看 {district} 的同类房源，并围绕“{reasons}”做人工复核；"
+            f"如果预算上限仍是 {budget_max or '当前值'} 万元，建议再追问该区县的挂牌价分布与异常样本。"
+        )
+
+    @staticmethod
+    def _extract_buyer_preferences(question: str, district: str | None) -> dict:
+        text = question or ""
+        budget_matches = [float(item) for item in __import__("re").findall(r"(\d+(?:\.\d+)?)\s*万", text)]
+        area_matches = [float(item) for item in __import__("re").findall(r"(\d+(?:\.\d+)?)\s*(?:平|平米|平方米)", text)]
+        prefer_metro = any(word in text for word in ["通勤", "地铁", "近地铁", "方便上班"])
+        commute_mode = "metro_priority" if prefer_metro else "balanced"
+        if "性价比" in text or "预算有限" in text or "刚工作" in text:
+            commute_mode = "value_priority" if not prefer_metro else "metro_priority"
+        return {
+            "district": district,
+            "budget_max": max(budget_matches) if budget_matches else None,
+            "area_min": min(area_matches) if area_matches else None,
+            "prefer_metro": prefer_metro,
+            "commute_mode": commute_mode,
+            "limit": 5,
+        }
 
     @staticmethod
     def _execution_summary(tool_calls: list[dict]) -> str:

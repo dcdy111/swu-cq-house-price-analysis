@@ -77,7 +77,8 @@ if (-not (Test-PortInUse $BackendPort)) {
 }
 
 $backendUrl = "http://127.0.0.1:$BackendPort"
-$frontendCommand = "`$env:VITE_API_BASE_URL='$backendUrl'; npm run dev -- --host 127.0.0.1 --port $FrontendPort"
+$frontendUrl = "http://127.0.0.1:$FrontendPort"
+$frontendCommand = "`$env:VITE_API_BASE_URL=''; `$env:VITE_BACKEND_PROXY_TARGET='$backendUrl'; npm run dev -- --host 127.0.0.1 --port $FrontendPort"
 $frontend = Start-Process `
   -FilePath "powershell" `
   -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-Command",$frontendCommand `
@@ -89,10 +90,10 @@ $frontend = Start-Process `
 
 Start-Sleep -Seconds 3
 
-Write-Host "Backend URL: $backendUrl"
-Write-Host "Frontend URL: http://127.0.0.1:$FrontendPort"
+Write-Host "Unified browser URL: $frontendUrl"
+Write-Host "Backend API target: $backendUrl"
 Write-Host "Backend log: $backendLog"
 Write-Host "Frontend log: $frontendLog"
 if ($backend) { Write-Host "Backend PID: $($backend.Id)" }
 Write-Host "Frontend PID: $($frontend.Id)"
-Write-Host "Note: VITE_API_BASE_URL points the frontend directly to this backend."
+Write-Host "Note: open only the unified browser URL. The frontend forwards /api to the backend target."

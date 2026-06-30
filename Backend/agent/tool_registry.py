@@ -7,7 +7,8 @@ from Backend.extensions import db
 from Backend.models.agent import GeneratedReport
 from Backend.services.analysis_service import AnalysisService
 from Backend.services.crawl_service import CrawlService
-from Backend.services.dashboard_service import DashboardService
+from Backend.services.dashboard_service import DashboardService, normalize_district_name
+from Backend.services.listing_service import ListingService
 
 
 @dataclass(frozen=True)
@@ -19,9 +20,13 @@ class ToolSpec:
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, allowed_permissions: set[str] | None = None) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        # Agent 对业务数据默认只读；write_report 仅允许保存本轮生成物，
+        # 不允许模型直接修改房源、执行 SQL 或自行启动采集/训练任务。
+        self.allowed_permissions = allowed_permissions or {"read", "write_report"}
         self.register("query_market_stats", "read", "查询总体、区县和价格区间统计", self.query_market_stats)
+        self.register("recommend_buy_options", "read", "按预算、面积、通勤代理和质量分推荐候选房源", self.recommend_buy_options)
         self.register("get_chart_series", "read", "获取 ECharts 序列数据", self.get_chart_series)
         self.register("get_crawl_status", "read", "查询采集任务状态和失败页", self.get_crawl_status)
         self.register("run_incremental_crawl", "write_task", "创建增量采集任务，不直接写房源", self.run_incremental_crawl)
@@ -36,30 +41,54 @@ class ToolRegistry:
         return [
             {"name": spec.name, "permission": spec.permission, "description": spec.description}
             for spec in self._tools.values()
+            if spec.permission in self.allowed_permissions
         ]
 
     def execute(self, name: str, args: dict) -> dict:
         if name not in self._tools:
             raise ValueError(f"工具不在白名单中: {name}")
-        return self._tools[name].handler(args or {})
+        spec = self._tools[name]
+        if spec.permission not in self.allowed_permissions:
+            raise PermissionError(f"Agent 当前为只读模式，禁止调用工具: {name}")
+        return spec.handler(args or {})
 
     @staticmethod
     def query_market_stats(args: dict) -> dict:
         district = args.get("district")
         overview = DashboardService.overview()
-        district_items = DashboardService.district_price(limit=int(args.get("limit") or 20))["items"]
+        requested_district = normalize_district_name(district) if district else None
+        requested_limit = int(args.get("limit") or 20)
+        # 指定区县时必须先取完整区县集合再筛选，避免目标区县因均价排名靠后
+        # 被 limit 截断后误判为“无数据”。
+        district_items = DashboardService.district_price(
+            limit=100 if requested_district else requested_limit
+        )["items"]
         if district and district not in {"全部区县", "all"}:
-            district_items = [item for item in district_items if item["district"] == district]
+            district_items = [
+                item
+                for item in district_items
+                if normalize_district_name(item["district"]) == requested_district
+            ]
+        elif requested_limit < len(district_items):
+            district_items = district_items[:requested_limit]
         price_distribution = DashboardService.price_distribution()
         return {
             "overview": overview["kpis"],
             "top_district": overview.get("top_district"),
             "district_items": district_items,
+            "query": {
+                "requested_district": requested_district,
+                "matched": bool(district_items) if requested_district else None,
+            },
             "price_distribution": price_distribution,
             "source_summary": overview.get("source_summary", []),
             "status_summary": overview.get("status_summary", []),
             "metric_note": "所有价格均为挂牌价/报价，不代表成交价。",
         }
+
+    @staticmethod
+    def recommend_buy_options(args: dict) -> dict:
+        return ListingService.recommend_for_buyer(args)
 
     @staticmethod
     def get_chart_series(args: dict) -> dict:

@@ -187,6 +187,9 @@ export function AnalysisPage() {
   const reportReference = useMemo(() => {
     const metrics = regressionResult?.metrics ?? {};
     const topFeatures = (featureImportance ?? []).slice(0, 5).map(item => `${item.feature}(${item.importance})`).join("、");
+    const tuningLine = metrics.search_candidates
+      ? `- 参数搜索：共评估 ${metrics.search_candidates} 组参数，CV=${metrics.cv_folds} 折，最佳参数 ${JSON.stringify(metrics.best_params ?? {})}`
+      : "- 参数搜索：当前结果不是参数搜索任务。";
     const comparison = modelComparisonRows
       .map(item => `- ${item.model}: R²=${item.r2}, MAE=${item.mae}, RMSE=${item.rmse}${item.isBest ? "（最佳）" : ""}`)
       .join("\n");
@@ -199,6 +202,7 @@ export function AnalysisPage() {
       `- 指标：MAE=${metrics.mae ?? "--"}，RMSE=${metrics.rmse ?? "--"}，R²=${metrics.r2 ?? "--"}，MAPE=${metrics.mape ?? "--"}%`,
       `- 聚类：${clusterResult?.model_name ?? "暂无"}，轮廓系数=${clusterResult?.metrics?.silhouette_score ?? "--"}，分层数=${clusterResult?.metrics?.cluster_count ?? "--"}`,
       `- 异常检测：${anomalyResult?.model_name ?? "暂无"}，异常样本=${anomalyResult?.metrics?.anomaly_count ?? "--"} 条，异常率=${anomalyResult?.metrics?.anomaly_rate !== undefined ? `${(Number(anomalyResult.metrics.anomaly_rate) * 100).toFixed(2)}%` : "--"}`,
+      tuningLine,
       `- 主要特征：${topFeatures || "暂无"}`,
       "",
       "#### 候选模型对比",
@@ -233,7 +237,11 @@ export function AnalysisPage() {
     if (training) return;
     setTraining(true);
     try {
-      const nextJob = await api.createAnalysisJob({ job_type: "all" });
+      const nextJob = await api.createAnalysisJob(
+        type === "tune"
+          ? { job_type: "tune", max_samples: 3000 }
+          : { job_type: "all" },
+      );
       setJob(nextJob);
       setResults(nextJob.results ?? []);
       setApiError(null);
@@ -483,6 +491,7 @@ export function AnalysisPage() {
                 ["有效样本", `${job?.sample_count ?? "--"}`],
                 ["区县覆盖", `${regressionResult?.metrics?.sampling_district_count ?? "--"} 个`],
                 ["数据来源", `${regressionResult?.metrics?.sampling_source_count ?? "--"} 个`],
+                ["调参状态", regressionResult?.metrics?.tuning_status === "searched" ? "已完成参数搜索" : regressionResult?.metrics?.tuning_status === "baseline" ? "默认参数基线" : "--"],
                 ["训练集", `${job?.train_count ?? "--"}`],
                 ["测试集", `${job?.test_count ?? "--"}`],
                 ["异常率", anomalyResult?.metrics?.anomaly_rate !== undefined ? `${(Number(anomalyResult.metrics.anomaly_rate) * 100).toFixed(2)}%` : "--"],
@@ -502,7 +511,7 @@ export function AnalysisPage() {
             disabled={training || loading}
             onClick={() => runTraining("tune")}
           >
-            <Brain size={14} className="mr-1.5" />{training ? "任务运行中" : "调参优化"}
+            <Brain size={14} className="mr-1.5" />{training ? "任务运行中" : "参数搜索"}
           </Button>
 
           <SectionCard title="训练任务">

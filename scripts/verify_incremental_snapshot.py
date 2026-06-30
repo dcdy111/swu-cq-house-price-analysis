@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -16,6 +17,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="验证增量 upsert：重复数据不新增主表，价格变化新增快照。")
     parser.add_argument("--database-url", help="可选，覆盖 DATABASE_URL。默认读取 .env / 环境变量。")
     parser.add_argument("--keep", action="store_true", help="保留本次验收样本；默认验证后清理。")
+    parser.add_argument("--evidence-json", help="可选，把检查项、前后计数和清理状态写入 JSON 证据文件。")
     args = parser.parse_args()
 
     if args.database_url:
@@ -91,10 +93,44 @@ def main() -> int:
         if not all(checks.values()):
             raise RuntimeError("增量快照验收失败")
 
+        cleanup_performed = False
         if not args.keep:
             db.session.delete(listing)
             db.session.commit()
+            cleanup_performed = True
             print("[cleanup] 已清理本地验收样本。需要保留证据时请加 --keep。")
+
+        if args.evidence_json:
+            evidence_path = Path(args.evidence_json).expanduser().resolve()
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            final_total = db.session.query(db.func.count(Listing.id)).scalar() or 0
+            final_snapshots = db.session.query(db.func.count(ListingSnapshot.id)).scalar() or 0
+            evidence = {
+                "verified_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "checks": checks,
+                "sample": {
+                    "source": raw["source"],
+                    "source_listing_id": source_listing_id,
+                    "listing_id": listing.id,
+                    "fingerprint": fingerprint,
+                },
+                "observed_counts": {
+                    "listings_before": int(before_total),
+                    "listings_after_insert": int(after_insert_total),
+                    "listings_after_duplicate": int(after_duplicate_total),
+                    "listings_after_price_change": int(after_total),
+                    "snapshots_before": int(before_snapshots),
+                    "snapshots_after_price_change": int(after_snapshots),
+                    "sample_snapshot_count": int(listing_snapshot_count),
+                },
+                "cleanup": {
+                    "performed": cleanup_performed,
+                    "final_listing_count": int(final_total),
+                    "final_snapshot_count": int(final_snapshots),
+                },
+            }
+            evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"[evidence] {evidence_path}")
 
     return 0
 

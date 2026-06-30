@@ -12,7 +12,7 @@ from Backend.models.listing import Listing
 from Backend.services.dashboard_service import normalize_district_name
 
 
-VALID_JOB_TYPES = {"all", "eda", "regression", "cluster", "anomaly"}
+VALID_JOB_TYPES = {"all", "eda", "regression", "tune", "cluster", "anomaly"}
 VALID_STATUSES = ("active", "valid")
 NUMERIC_FEATURE_NAMES = [
     "建筑面积",
@@ -352,6 +352,8 @@ class AnalysisService:
             return [AnalysisService._eda_result(records)]
         if job_type == "regression":
             return AnalysisService._regression_results(records)
+        if job_type == "tune":
+            return AnalysisService._tuned_regression_results(records)
         if job_type == "cluster":
             return [AnalysisService._cluster_result(records)]
         return [AnalysisService._anomaly_result(records)]
@@ -450,6 +452,63 @@ class AnalysisService:
         except Exception as exc:
             result = AnalysisService._ridge_regression_result(training_records, source_sample_count=len(records), exclusion=exclusion)
             result["summary"] = f"{result['summary']}；sklearn 集成树训练失败，已使用 Ridge 兜底。"
+            result["evidence"]["fallback_reason"] = str(exc)
+            return [result]
+
+    @staticmethod
+    def _tuned_regression_results(records: list[dict]) -> list[dict]:
+        training_records, exclusion = AnalysisService._filter_regression_records(records)
+        if len(training_records) < 10:
+            return [
+                {
+                    "result_type": "regression",
+                    "model_name": "GradientBoostingRegressor 参数搜索",
+                    "summary": "可用样本少于 10 条，暂不执行交叉验证参数搜索。已避免把普通分析误写成调参。 ",
+                    "metrics": {
+                        "status": "insufficient_sample",
+                        "sample_count": len(records),
+                        "training_sample_count": len(training_records),
+                        "excluded_count": exclusion["excluded_count"],
+                        "train_count": 0,
+                        "test_count": 0,
+                        "mae": None,
+                        "rmse": None,
+                        "r2": None,
+                        "mape": None,
+                        "search_candidates": 0,
+                        "cv_folds": 0,
+                    },
+                    "artifacts": {
+                        "feature_importance": [],
+                        "predictions": [],
+                        "model_comparison": [],
+                        "tuning": {
+                            "status": "insufficient_sample",
+                            "note": "样本不足时不执行参数搜索，避免把普通重跑误判为调参。",
+                        },
+                    },
+                    "evidence": {
+                        "filters": AnalysisService._default_filters(),
+                        "feature_groups": AnalysisService._feature_groups(),
+                        "exclusion_policy": exclusion["policy"],
+                    },
+                }
+            ]
+
+        try:
+            return AnalysisService._sklearn_tuned_regression_results(
+                training_records,
+                source_sample_count=len(records),
+                exclusion=exclusion,
+            )
+        except Exception as exc:
+            result = AnalysisService._ridge_regression_result(
+                training_records,
+                source_sample_count=len(records),
+                exclusion=exclusion,
+            )
+            result["summary"] = f"{result['summary']}；参数搜索失败，已回退到 Ridge 基线。"
+            result["metrics"]["tuning_status"] = "failed"
             result["evidence"]["fallback_reason"] = str(exc)
             return [result]
 
@@ -670,6 +729,190 @@ class AnalysisService:
         candidate_results = [
             AnalysisService._build_regression_candidate_result(item, comparison, encoder, exclusion)
             for item in [*candidates, *failed_candidates]
+        ]
+        return [best_result, *candidate_results]
+
+    @staticmethod
+    def _sklearn_tuned_regression_results(
+        records: list[dict],
+        source_sample_count: int | None = None,
+        exclusion: dict | None = None,
+    ) -> list[dict]:
+        from sklearn.ensemble import GradientBoostingRegressor
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+        from sklearn.model_selection import RandomizedSearchCV, train_test_split
+
+        source_sample_count = source_sample_count or len(records)
+        exclusion = exclusion or AnalysisService._empty_exclusion()
+        train_records, test_records = train_test_split(records, test_size=0.2, random_state=42, shuffle=True)
+        encoder = AnalysisService._build_feature_encoder(train_records)
+        x_train = [AnalysisService._features_for_item(item, encoder) for item in train_records]
+        y_train = [item["unit_price"] for item in train_records]
+        x_test = [AnalysisService._features_for_item(item, encoder) for item in test_records]
+        y_test = [item["unit_price"] for item in test_records]
+
+        cv_folds = 3 if len(train_records) >= 12 else 2
+        search_space = {
+            "n_estimators": [100, 160, 220],
+            "learning_rate": [0.03, 0.05, 0.08],
+            "max_depth": [2, 3, 4],
+            "min_samples_leaf": [3, 5, 8],
+            "subsample": [0.8, 1.0],
+        }
+        search = RandomizedSearchCV(
+            estimator=GradientBoostingRegressor(random_state=42),
+            param_distributions=search_space,
+            n_iter=6,
+            scoring="neg_root_mean_squared_error",
+            cv=cv_folds,
+            random_state=42,
+            n_jobs=1,
+        )
+        search.fit(x_train, y_train)
+
+        def evaluate_candidate(model_name: str, algorithm: str, model, extra_metrics: dict | None = None) -> dict:
+            model.fit(x_train, y_train)
+            y_pred = model.predict(x_test)
+            rmse = math.sqrt(mean_squared_error(y_test, y_pred))
+            mape = mean(abs(_safe_div(actual - pred, actual)) for actual, pred in zip(y_test, y_pred)) * 100
+            metrics = {
+                "status": "ok",
+                "target": "unit_price",
+                "target_label": "挂牌单价（元/平方米）",
+                "sample_count": source_sample_count,
+                "training_sample_count": len(records),
+                "excluded_count": exclusion["excluded_count"],
+                "train_count": len(train_records),
+                "test_count": len(test_records),
+                "feature_count": len(encoder["feature_names"]),
+                "mae": _round(mean_absolute_error(y_test, y_pred), 2),
+                "rmse": _round(rmse, 2),
+                "r2": _round(r2_score(y_test, y_pred), 4),
+                "mape": _round(mape, 2),
+            }
+            if extra_metrics:
+                metrics.update(extra_metrics)
+            return {
+                "model_name": model_name,
+                "algorithm": algorithm,
+                "model": model,
+                "y_pred": y_pred,
+                "source_metrics": AnalysisService._segment_metrics(test_records, y_test, y_pred, "source"),
+                "metrics": metrics,
+            }
+
+        baseline_candidate = evaluate_candidate(
+            "GradientBoostingRegressor 默认参数基线",
+            "sklearn.ensemble.GradientBoostingRegressor",
+            GradientBoostingRegressor(
+                n_estimators=180,
+                learning_rate=0.05,
+                max_depth=3,
+                min_samples_leaf=5,
+                random_state=42,
+            ),
+            {"tuning_status": "baseline"},
+        )
+        best_params = {
+            key: value.item() if hasattr(value, "item") else value
+            for key, value in search.best_params_.items()
+        }
+        tuned_candidate = evaluate_candidate(
+            "GradientBoostingRegressor 参数搜索最优模型",
+            "sklearn.model_selection.RandomizedSearchCV -> sklearn.ensemble.GradientBoostingRegressor",
+            search.best_estimator_,
+            {
+                "tuning_status": "searched",
+                "cv_folds": cv_folds,
+                "search_candidates": len(search.cv_results_.get("params", [])),
+                "cv_best_rmse": _round(-float(search.best_score_), 2),
+                "best_params": best_params,
+            },
+        )
+
+        candidates = [tuned_candidate, baseline_candidate]
+        candidates.sort(
+            key=lambda item: (
+                float(item["metrics"].get("r2") or -9999),
+                -float(item["metrics"].get("rmse") or 999999999),
+                -float(item["metrics"].get("mae") or 999999999),
+            ),
+            reverse=True,
+        )
+        for index, item in enumerate(candidates, start=1):
+            item["metrics"]["rank"] = index
+            item["metrics"]["is_best"] = index == 1
+
+        comparison = [
+            {
+                "model_name": item["model_name"],
+                "algorithm": item["algorithm"],
+                **item["metrics"],
+            }
+            for item in candidates
+        ]
+        best = candidates[0]
+        best_result = AnalysisService._build_best_regression_result(
+            best=best,
+            comparison=comparison,
+            encoder=encoder,
+            test_records=test_records,
+            y_test=y_test,
+            exclusion=exclusion,
+        )
+        best_result["summary"] = (
+            "已执行 GradientBoostingRegressor 受控参数搜索，并与默认参数基线在同一测试集上对比。"
+            if best["metrics"].get("tuning_status") == "searched"
+            else "已执行参数搜索，但默认参数基线在当前样本上更优，因此未强行替换为搜索结果。"
+        )
+        best_result["metrics"].update(
+            {
+                "search_candidates": tuned_candidate["metrics"]["search_candidates"],
+                "cv_folds": tuned_candidate["metrics"]["cv_folds"],
+                "cv_best_rmse": tuned_candidate["metrics"]["cv_best_rmse"],
+                "best_params": best_params,
+                "baseline_r2": baseline_candidate["metrics"]["r2"],
+                "baseline_rmse": baseline_candidate["metrics"]["rmse"],
+                "tuned_r2": tuned_candidate["metrics"]["r2"],
+                "tuned_rmse": tuned_candidate["metrics"]["rmse"],
+                "improved_vs_baseline": tuned_candidate["metrics"]["r2"] >= baseline_candidate["metrics"]["r2"],
+            }
+        )
+        best_result["artifacts"].update(
+            {
+                "tuning": {
+                    "status": "completed",
+                    "search_algorithm": "sklearn.model_selection.RandomizedSearchCV",
+                    "base_estimator": "sklearn.ensemble.GradientBoostingRegressor",
+                    "cv_folds": cv_folds,
+                    "n_iter": 6,
+                    "search_space": search_space,
+                    "best_params": best_params,
+                    "best_cv_rmse": tuned_candidate["metrics"]["cv_best_rmse"],
+                    "baseline_model": baseline_candidate["model_name"],
+                    "baseline_r2": baseline_candidate["metrics"]["r2"],
+                    "baseline_rmse": baseline_candidate["metrics"]["rmse"],
+                    "tuned_r2": tuned_candidate["metrics"]["r2"],
+                    "tuned_rmse": tuned_candidate["metrics"]["rmse"],
+                }
+            }
+        )
+        best_result["evidence"].update(
+            {
+                "tuning_search": {
+                    "algorithm": "sklearn.model_selection.RandomizedSearchCV",
+                    "base_estimator": "sklearn.ensemble.GradientBoostingRegressor",
+                    "scoring": "neg_root_mean_squared_error",
+                    "cv_folds": cv_folds,
+                    "n_iter": 6,
+                    "search_space": search_space,
+                    "best_params": best_params,
+                }
+            }
+        )
+        candidate_results = [
+            AnalysisService._build_regression_candidate_result(item, comparison, encoder, exclusion)
+            for item in candidates
         ]
         return [best_result, *candidate_results]
 

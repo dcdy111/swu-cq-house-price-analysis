@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from sqlalchemy import case, distinct
 
 from Backend.extensions import db
@@ -10,6 +12,14 @@ from Backend.models.snapshot import ListingSnapshot
 
 MIN_ANALYSIS_QUALITY = 80
 STRICT_TARGET_COUNT = 50_000
+QUALITY_WEIGHTS = {
+    "completeness": 0.25,
+    "uniqueness": 0.15,
+    "consistency": 0.15,
+    "timeliness": 0.15,
+    "validity": 0.20,
+    "verifiability": 0.10,
+}
 
 
 def _analysis_ready_condition():
@@ -87,6 +97,11 @@ class QualityService:
         strict_count = int(overview_row.strict_new_standard_count or 0)
         mode = "new_standard_primary" if strict_count >= STRICT_TARGET_COUNT else "hybrid_cold_start"
 
+        dimension_scores = QualityService._dimension_scores(int(total_count))
+        weighted_quality = round(
+            sum(item["score"] * QUALITY_WEIGHTS[item["key"]] for item in dimension_scores),
+            2,
+        )
         return {
             "overview": {
                 "total_count": int(overview_row.total_count or 0),
@@ -97,7 +112,8 @@ class QualityService:
                 "analysis_ready_count": int(overview_row.analysis_ready_count or 0),
                 "strict_new_standard_count": strict_count,
                 "snapshot_count": int(snapshot_count),
-                "avg_quality": round(float(overview_row.avg_quality or 0), 2),
+                "avg_quality": weighted_quality,
+                "legacy_avg_quality": round(float(overview_row.avg_quality or 0), 2),
                 "extreme_count": int(overview_row.extreme_count or 0),
                 "missing_count": int(overview_row.missing_count or 0),
                 "low_quality_count": int(overview_row.low_quality_count or 0),
@@ -106,10 +122,131 @@ class QualityService:
             },
             "source_layers": QualityService._source_layers(),
             "quality_buckets": QualityService._quality_buckets(),
+            "dimension_scores": dimension_scores,
+            "methodology": QualityService._methodology(),
             "abnormal_samples": QualityService._abnormal_samples(),
             "cleaning_steps": QualityService._cleaning_steps(),
             "analysis_policy": QualityService._analysis_policy(mode),
         }
+
+    @staticmethod
+    def _dimension_scores(total_count: int) -> list[dict]:
+        if total_count <= 0:
+            return QualityService._empty_dimension_scores()
+
+        non_empty_text = lambda column: db.and_(column.isnot(None), column != "")
+        completeness_conditions = [
+            non_empty_text(Listing.title),
+            non_empty_text(Listing.link),
+            non_empty_text(Listing.district),
+            Listing.total_price.isnot(None),
+            Listing.unit_price.isnot(None),
+            Listing.area.isnot(None),
+        ]
+        completeness_points = sum(
+            int(db.session.query(db.func.count(Listing.id)).filter(condition).scalar() or 0)
+            for condition in completeness_conditions
+        )
+        completeness = completeness_points / (total_count * len(completeness_conditions)) * 100
+
+        unique_count = db.session.query(
+            db.func.count(distinct(db.func.concat(Listing.source, ":", Listing.fingerprint)))
+        ).scalar() or 0
+        uniqueness = unique_count / total_count * 100
+
+        consistency_condition = db.and_(
+            Listing.total_price.isnot(None),
+            Listing.unit_price.isnot(None),
+            Listing.area.isnot(None),
+            Listing.area > 0,
+            db.func.abs((Listing.total_price * 10000 / Listing.area) - Listing.unit_price)
+            / db.func.greatest(Listing.unit_price, 1)
+            <= 0.12,
+        )
+        consistency_count = db.session.query(db.func.count(Listing.id)).filter(consistency_condition).scalar() or 0
+        consistency = consistency_count / total_count * 100
+
+        fresh_since = datetime.utcnow() - timedelta(days=30)
+        timely_count = (
+            db.session.query(db.func.count(Listing.id))
+            .filter(Listing.last_seen_at >= fresh_since, Listing.status.in_(["active", "valid"]))
+            .scalar()
+            or 0
+        )
+        timeliness = timely_count / total_count * 100
+
+        validity_condition = db.and_(
+            Listing.total_price.between(5, 5000),
+            Listing.unit_price.between(1000, 100000),
+            Listing.area.between(10, 500),
+            non_empty_text(Listing.district),
+            Listing.district != "待复核",
+            non_empty_text(Listing.link),
+        )
+        validity_count = db.session.query(db.func.count(Listing.id)).filter(validity_condition).scalar() or 0
+        validity = validity_count / total_count * 100
+
+        verifiable_condition = db.and_(
+            non_empty_text(Listing.source),
+            non_empty_text(Listing.source_listing_id),
+            Listing.link.like("http%"),
+            consistency_condition,
+        )
+        verifiable_count = db.session.query(db.func.count(Listing.id)).filter(verifiable_condition).scalar() or 0
+        verifiability = verifiable_count / total_count * 100
+
+        values = {
+            "completeness": completeness,
+            "uniqueness": uniqueness,
+            "consistency": consistency,
+            "timeliness": timeliness,
+            "validity": validity,
+            "verifiability": verifiability,
+        }
+        labels = {
+            "completeness": "完整性",
+            "uniqueness": "唯一性",
+            "consistency": "一致性",
+            "timeliness": "及时性",
+            "validity": "有效性",
+            "verifiability": "可核验性",
+        }
+        return [
+            {
+                "key": key,
+                "label": labels[key],
+                "score": round(max(0.0, min(100.0, float(values[key]))), 2),
+                "weight": QUALITY_WEIGHTS[key],
+            }
+            for key in QUALITY_WEIGHTS
+        ]
+
+    @staticmethod
+    def _methodology() -> dict:
+        return {
+            "framework": "ISO/IEC 25012 + Government Data Quality Framework",
+            "purpose": "重庆二手房挂牌价分析与辅助建模",
+            "freshness_sla_days": 30,
+            "price_consistency_tolerance": 0.12,
+            "weights": QUALITY_WEIGHTS,
+            "verifiability_note": "可核验性只衡量来源 ID、链接、字段内部一致性与抽样核验准备度，不等同于真实准确率；真实准确性仍需源页面抽查或跨来源核验。",
+            "version": "dq-v2.0",
+        }
+
+    @staticmethod
+    def _empty_dimension_scores() -> list[dict]:
+        labels = {
+            "completeness": "完整性",
+            "uniqueness": "唯一性",
+            "consistency": "一致性",
+            "timeliness": "及时性",
+            "validity": "有效性",
+            "verifiability": "可核验性",
+        }
+        return [
+            {"key": key, "label": labels[key], "score": 0, "weight": weight}
+            for key, weight in QUALITY_WEIGHTS.items()
+        ]
 
     @staticmethod
     def save_report(report_type: str = "manual") -> DataQualityReport:
@@ -310,6 +447,8 @@ class QualityService:
             },
             "source_layers": [],
             "quality_buckets": [],
+            "dimension_scores": QualityService._empty_dimension_scores(),
+            "methodology": QualityService._methodology(),
             "abnormal_samples": [],
             "cleaning_steps": QualityService._cleaning_steps(),
             "analysis_policy": QualityService._analysis_policy("hybrid_cold_start"),

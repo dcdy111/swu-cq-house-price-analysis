@@ -29,6 +29,8 @@ class CrawlTask(db.Model):
     updated_count = db.Column(db.Integer, nullable=False, default=0)
     unchanged_count = db.Column(db.Integer, nullable=False, default=0)
     snapshot_count = db.Column(db.Integer, nullable=False, default=0)
+    run_id = db.Column(db.String(64))
+    evidence_json = db.Column(db.Text)
     error_message = db.Column(db.Text)
     started_at = db.Column(db.DateTime)
     finished_at = db.Column(db.DateTime)
@@ -78,6 +80,17 @@ class CrawlTask(db.Model):
         return round(done / duration * 60, 2)
 
     @property
+    def evidence(self) -> dict:
+        try:
+            value = json.loads(self.evidence_json or "{}")
+            return value if isinstance(value, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def set_evidence(self, evidence: dict | None) -> None:
+        self.evidence_json = json.dumps(evidence or {}, ensure_ascii=False)
+
+    @property
     def failure_rate(self) -> float:
         if self.total_pages <= 0:
             return 0.0
@@ -101,6 +114,8 @@ class CrawlTask(db.Model):
             "updated_count": self.updated_count,
             "unchanged_count": self.unchanged_count,
             "snapshot_count": self.snapshot_count,
+            "run_id": self.run_id,
+            "evidence": self.evidence,
             "progress": self.progress,
             "duration_seconds": self.duration_seconds,
             "listings_per_minute": self.listings_per_minute,

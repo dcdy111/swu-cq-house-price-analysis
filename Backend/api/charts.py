@@ -20,6 +20,12 @@ def district_map():
     return api_success(DashboardService.district_map())
 
 
+@bp.get("/district-value-profile")
+def district_value_profile():
+    limit = int(request.args.get("limit", 8))
+    return api_success(DashboardService.district_value_profile(limit=limit))
+
+
 @bp.get("/price-distribution")
 def price_distribution():
     return api_success(DashboardService.price_distribution())

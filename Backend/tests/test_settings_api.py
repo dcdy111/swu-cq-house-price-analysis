@@ -3,6 +3,21 @@ from __future__ import annotations
 from Backend.models.setting import SystemSetting
 
 
+def test_settings_update_reconfigures_scheduler(client, monkeypatch):
+    captured = {"count": 0}
+
+    def fake_reconfigure_scheduler(app):
+        captured["count"] += 1
+        app.extensions["scheduler"] = None
+        return None
+
+    monkeypatch.setattr("Backend.api.settings.reconfigure_scheduler", fake_reconfigure_scheduler)
+    response = client.put("/api/settings", json={"scheduler": {"enabled": True, "incremental_crawl_interval_hours": 6}})
+
+    assert response.status_code == 200
+    assert captured["count"] == 1
+
+
 def test_settings_can_be_saved_and_read_without_secret_echo(client):
     initial = client.get("/api/settings")
     assert initial.status_code == 200

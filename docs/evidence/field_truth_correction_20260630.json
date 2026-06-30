@@ -1,0 +1,28 @@
+{
+  "verified_at": "2026-06-30T06:20:00Z",
+  "principle": "metro_distance / building_type / has_elevator / total_floors 只保存爬虫页面中明确出现并解析出的值；没有明确字段就保留 NULL，不用标题、地址、标签做二次推断。",
+  "removed_artifacts": [
+    "scripts/backfill_listing_structure_fields.py",
+    "docs/evidence/listing_structure_backfill_20260630.json",
+    "docs/evidence/listing_structure_backfill_20260630_rerun.json",
+    "docs/evidence/field_backfill_and_crawl_20260630.json"
+  ],
+  "database_correction": {
+    "corrected_rows": 10506,
+    "before": {
+      "total": 50708,
+      "metro_distance": 4506,
+      "building_type": 4834,
+      "has_elevator": 610,
+      "total_floors": 1424
+    },
+    "after": {
+      "total": 50708,
+      "metro_distance": 1,
+      "building_type": 0,
+      "has_elevator": 0,
+      "total_floors": 0
+    }
+  },
+  "note": "房天下列表页对电梯、总楼层和建筑类型覆盖有限；系统尊重源页面事实，缺失字段不填写。后续如需提高覆盖率，应做详情页低并发补采，并记录字段来源。"
+}

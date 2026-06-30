@@ -19,10 +19,10 @@ TEST_DATABASE_URL=mysql+pymysql://root:root@127.0.0.1:3306/real_estate_test?char
 
 测试也使用 MySQL 的 `real_estate_test`，不使用 SQLite 内存库。
 
-## 本地联调推荐启动方式
+## 本地统一入口启动方式
 
 如果本机已经有旧 Flask/Vite 进程占用 `5000/5173`，前端可能请求到旧后端，表现为登录时报
-`Unexpected token '<'` 或 `/api/auth/login` 返回 HTML。推荐用本地启动脚本显式绑定当前后端：
+`Unexpected token '<'` 或 `/api/auth/login` 返回 HTML。推荐统一只用下面这个脚本启动：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/start_local_dev.ps1
@@ -34,13 +34,27 @@ powershell -ExecutionPolicy Bypass -File scripts/start_local_dev.ps1
 powershell -ExecutionPolicy Bypass -File scripts/start_local_dev.ps1 -UseFreePorts
 ```
 
-脚本会把前端 `VITE_API_BASE_URL` 指向当前 Flask 后端，避免依赖 Vite 代理猜测。启动后可做只读接口检查：
+脚本会输出一个 `Unified browser URL`。演示和页面验收只打开这个地址；前端所有 `/api` 请求由 Vite 代理转发到当前 Flask 后端，避免一会儿访问前端端口、一会儿访问后端端口。
+
+启动后可做只读接口检查：
 
 ```bash
 python scripts/local_demo_smoke.py --base-url http://127.0.0.1:5000
 ```
 
 如需连同 Agent 问数一起验收，可加 `--include-agent`，但这会新增一条 `agent_tool_calls` 记录。
+
+## 当前真实业务口径
+
+本系统优先展示“可维护的数据产品”能力，而不是一次性爬虫：
+
+- 数据层主线：MySQL 数据底座、`source + fingerprint` 去重、增量 upsert、价格快照、任务日志、六维质量报告。
+- 走势分析：`price_trend` 基于 `listing_snapshots.snapshot_at` 做月度挂牌价快照聚合，只表示历史快照趋势，不表示多年成交趋势或未来预测。
+- 规则推荐：Agent 的 `recommend_buy_options` 使用预算、面积、区县、通勤代理和质量分做可解释排序，不做协同过滤或深度学习推荐。
+- 异常识别：分析模块把异常房源作为风险提示和复核线索，不直接判定房源错误。
+- 区域画像：Dashboard 的“区域性价比指数”复用区县均价、样本量、质量分、价格稳定性和户型分布做相对排序，不代表成交价或投资建议。
+
+结构增强字段遵守事实边界：`metro_distance / building_type / has_elevator / total_floors` 只保存爬虫页面中明确出现并解析出的值；房天下列表页对电梯和总楼层覆盖有限，缺失就保留为空，不做后处理猜测。
 
 ## 调度与质量报告
 
@@ -108,6 +122,14 @@ python scripts/verify_incremental_snapshot.py
 
 该脚本会创建一条本地验收样本，验证“重复写入不新增主表、价格变化新增快照”，默认验证后清理样本；需要保留数据库证据时可加 `--keep`。
 
+数据库结构字段迁移：
+
+```bash
+mysql -u root -p real_estate < docs/schema_migrations_20260630.sql
+```
+
+如接口报 `Unknown column 'listings.total_floors'` 或 `Unknown column 'crawl_tasks.run_id'`，说明当前 MySQL 还没应用这份迁移。
+
 ## 前端运行
 
 ```bash
@@ -116,7 +138,12 @@ npm install
 npm run dev
 ```
 
-Vite 会把 `/api` 代理到 `http://127.0.0.1:5000`。
+单独启动前端时，Vite 默认把 `/api` 代理到 `http://127.0.0.1:5000`。如后端使用其他端口，请设置：
+
+```powershell
+$env:VITE_BACKEND_PROXY_TARGET="http://127.0.0.1:5002"
+npm run dev -- --host 127.0.0.1 --port 5173
+```
 
 ## 旧库冷启动导入
 

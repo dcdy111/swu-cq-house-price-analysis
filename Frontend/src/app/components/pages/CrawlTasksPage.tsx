@@ -149,6 +149,7 @@ export function CrawlTasksPage() {
 
   const tasks = taskList?.items ?? [];
   const summary = taskList?.summary ?? { running: 0, success: 0, failed: 0, partial_failed: 0, pending: 0, canceled: 0, cancel_requested: 0, total_found: 0 };
+  const selectedEvidenceTask = tasks.find(task => task.id === logTaskFilter) ?? null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -337,10 +338,89 @@ export function CrawlTasksPage() {
               <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 6 }}>
                 创建: {task.created_at}{task.started_at ? ` · 开始: ${task.started_at}` : ""}{task.finished_at ? ` · 结束: ${task.finished_at}` : ""}
               </div>
+              {task.evidence && (
+                <div className="mt-3 rounded-lg p-3" style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "#163A70" }}>定时增量证据</span>
+                    <span style={{ fontSize: 11, color: "#9CA3AF" }}>{task.run_id || task.evidence.run_id || "未生成 run_id"}</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+                    {[
+                      ["前房源数", task.evidence.before_listing_count],
+                      ["后房源数", task.evidence.after_listing_count],
+                      ["新增快照", task.evidence.new_snapshot_count],
+                      ["失败页", task.evidence.failed_pages],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="rounded-lg px-2.5 py-2" style={{ background: "#fff" }}>
+                        <div style={{ fontSize: 10, color: "#9CA3AF" }}>{label}</div>
+                        <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>{value ?? "-"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#4B5563", lineHeight: 1.7, marginTop: 8 }}>
+                    {task.evidence.log_summary || "暂无日志摘要"}
+                  </div>
+                </div>
+              )}
               {task.error_message && <div style={{ fontSize: 12, color: "#DC2626", marginTop: 6 }}>{task.error_message}</div>}
             </div>
           ))}
         </div>
+      </SectionCard>
+
+      <SectionCard
+        title="任务证据回放"
+        subtitle="每次定时/手动增量任务保存 run_id、前后数量、快照增量和最近日志摘要"
+      >
+        {!selectedEvidenceTask?.evidence ? (
+          <div style={{ fontSize: 13, color: "#9CA3AF" }}>
+            点击某个任务的日志按钮后，这里会显示该任务的证据回放卡。当前仅展示已保存 evidence 的任务。
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1F2937" }}>{selectedEvidenceTask.name}</div>
+                <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>run_id: {selectedEvidenceTask.run_id || selectedEvidenceTask.evidence.run_id || "-"}</div>
+              </div>
+              <StatusTag status={selectedEvidenceTask.status} label={TASK_STATUS_LABEL[selectedEvidenceTask.status] || selectedEvidenceTask.status} />
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                ["前房源数", selectedEvidenceTask.evidence.before_listing_count],
+                ["后房源数", selectedEvidenceTask.evidence.after_listing_count],
+                ["前快照数", selectedEvidenceTask.evidence.before_snapshot_count],
+                ["后快照数", selectedEvidenceTask.evidence.after_snapshot_count],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="rounded-lg p-3" style={{ border: "1px solid #E5EAF2", background: "#F8FAFC" }}>
+                  <div style={{ fontSize: 11, color: "#9CA3AF" }}>{label}</div>
+                  <div style={{ fontSize: 15, color: "#163A70", fontWeight: 700, marginTop: 4 }}>{value ?? "-"}</div>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-lg p-3" style={{ background: "#FFF7ED", border: "1px solid #FED7AA", color: "#9A3412", fontSize: 12, lineHeight: 1.7 }}>
+              {selectedEvidenceTask.evidence.log_summary || "暂无日志摘要"}
+            </div>
+            <div className="rounded-lg overflow-hidden" style={{ background: "#0F172A", fontFamily: "monospace" }}>
+              <div className="px-3 py-2" style={{ borderBottom: "1px solid #1E293B", color: "#64748B", fontSize: 12 }}>
+                recent evidence logs
+              </div>
+              <div className="p-3 flex flex-col gap-2">
+                {Array.isArray(selectedEvidenceTask.evidence.recent_logs) && selectedEvidenceTask.evidence.recent_logs.length > 0 ? selectedEvidenceTask.evidence.recent_logs.map((log: any) => (
+                  <div key={`${log.id}-${log.created_at}`} style={{ fontSize: 11, color: "#CBD5E1", lineHeight: 1.7 }}>
+                    <span style={{ color: "#64748B", marginRight: 8 }}>{String(log.created_at || "").slice(11, 19)}</span>
+                    <span style={{ color: log.level === "ERROR" ? "#FCA5A5" : log.level === "WARN" ? "#FCD34D" : "#93C5FD", marginRight: 8 }}>
+                      {log.level}
+                    </span>
+                    {log.message}
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 11, color: "#64748B" }}>暂无 recent_logs</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </SectionCard>
 
       <SectionCard

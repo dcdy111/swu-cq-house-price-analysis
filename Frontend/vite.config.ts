@@ -35,7 +35,7 @@ export default defineConfig({
   assetsInclude: ['**/*.svg', '**/*.csv'],
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:5000',
+      '/api': process.env.VITE_BACKEND_PROXY_TARGET || 'http://127.0.0.1:5000',
     },
   },
 })

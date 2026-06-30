@@ -1,0 +1,466 @@
+{
+  "verified_at": "2026-06-30T03:22:29Z",
+  "report": {
+    "id": 6,
+    "report_type": "six_dimension_v2",
+    "total_count": 50702,
+    "valid_count": 50701,
+    "analysis_ready_count": 50385,
+    "avg_quality": 99.87,
+    "missing_count": 1,
+    "extreme_count": 317,
+    "low_quality_count": 0,
+    "snapshot_count": 50702,
+    "summary": {
+      "recommended_mode": "new_standard_primary",
+      "recommended_mode_label": "新标准样本优先",
+      "source_layer_count": 1,
+      "abnormal_sample_count": 8
+    },
+    "created_at": "2026-06-30 03:22:30",
+    "detail": {
+      "overview": {
+        "total_count": 50702,
+        "distinct_fingerprint": 50702,
+        "distinct_link": 50702,
+        "legacy_count": 0,
+        "new_standard_count": 50702,
+        "analysis_ready_count": 50385,
+        "strict_new_standard_count": 50385,
+        "snapshot_count": 50702,
+        "avg_quality": 99.87,
+        "legacy_avg_quality": 99.76,
+        "extreme_count": 317,
+        "missing_count": 1,
+        "low_quality_count": 0,
+        "recommended_mode": "new_standard_primary",
+        "recommended_mode_label": "新标准样本优先"
+      },
+      "source_layers": [
+        {
+          "source": "fang",
+          "layer": "new_standard_crawl",
+          "layer_label": "新标准采集样本",
+          "sample_count": 50702,
+          "usable_count": 50385,
+          "avg_quality": 99.76,
+          "missing_count": 1,
+          "extreme_count": 317,
+          "district_count": 37,
+          "min_unit_price": 354.0,
+          "max_unit_price": 408164.0,
+          "recommended_usage": "优先用于后续趋势分析、质量报告、建模训练和跨来源校验"
+        }
+      ],
+      "quality_buckets": [
+        {
+          "bucket": "90-100",
+          "count": 50701
+        },
+        {
+          "bucket": "80-89",
+          "count": 1
+        },
+        {
+          "bucket": "60-79",
+          "count": 0
+        },
+        {
+          "bucket": "0-59",
+          "count": 0
+        }
+      ],
+      "dimension_scores": [
+        {
+          "key": "completeness",
+          "label": "完整性",
+          "score": 100.0,
+          "weight": 0.25
+        },
+        {
+          "key": "uniqueness",
+          "label": "唯一性",
+          "score": 100.0,
+          "weight": 0.15
+        },
+        {
+          "key": "consistency",
+          "label": "一致性",
+          "score": 100.0,
+          "weight": 0.15
+        },
+        {
+          "key": "timeliness",
+          "label": "及时性",
+          "score": 100.0,
+          "weight": 0.15
+        },
+        {
+          "key": "validity",
+          "label": "有效性",
+          "score": 99.37,
+          "weight": 0.2
+        },
+        {
+          "key": "verifiability",
+          "label": "可核验性",
+          "score": 100.0,
+          "weight": 0.1
+        }
+      ],
+      "methodology": {
+        "framework": "ISO/IEC 25012 + Government Data Quality Framework",
+        "purpose": "重庆二手房挂牌价分析与辅助建模",
+        "freshness_sla_days": 30,
+        "price_consistency_tolerance": 0.12,
+        "weights": {
+          "completeness": 0.25,
+          "uniqueness": 0.15,
+          "consistency": 0.15,
+          "timeliness": 0.15,
+          "validity": 0.2,
+          "verifiability": 0.1
+        },
+        "verifiability_note": "可核验性只衡量来源 ID、链接、字段内部一致性与抽样核验准备度，不等同于真实准确率；真实准确性仍需源页面抽查或跨来源核验。",
+        "version": "dq-v2.0"
+      },
+      "abnormal_samples": [
+        {
+          "id": 224833,
+          "source": "fang",
+          "source_listing_id": "12301209",
+          "title": "【关口村小区】| 重庆市长寿区关口路1号2幢1-3-1房产",
+          "link": "https://cq.esf.fang.com/fapai/out_12301209.html",
+          "district": "长寿",
+          "community": "关口村小区",
+          "address": "关口村小区 长寿 长寿 关口村小区",
+          "total_price": 0.0,
+          "unit_price": null,
+          "area": 118.1,
+          "layout": null,
+          "rooms": null,
+          "halls": null,
+          "orientation": null,
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [],
+          "fingerprint": "c7f4ff18ad017018334c68e64a4cd697d4ed7c53",
+          "data_quality_score": 80,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:53:43",
+          "last_seen_at": "2026-06-26 04:53:43",
+          "created_at": "2026-06-26 04:53:43",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "总价超出规则区间；关键价格/面积字段缺失"
+        },
+        {
+          "id": 224789,
+          "source": "fang",
+          "source_listing_id": "1021399494",
+          "title": "南泉保利小泉别墅A区(一期)五房1200万",
+          "link": "https://cq.esf.fang.com/chushou/8_1021399494.htm",
+          "district": "巴南",
+          "community": "保利小泉别墅",
+          "address": "保利小泉别墅 渝南大道 巴南区小泉",
+          "total_price": 1200.0,
+          "unit_price": 22706.0,
+          "area": 528.49,
+          "layout": "卧室：5个",
+          "rooms": null,
+          "halls": null,
+          "orientation": "南向",
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [
+            "3km公园",
+            "3km购物中心",
+            "3km三甲医院"
+          ],
+          "fingerprint": "11d347f399cdc33928a02c5e828746d7e2c67baf",
+          "data_quality_score": 91,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:53:43",
+          "last_seen_at": "2026-06-26 04:53:43",
+          "created_at": "2026-06-26 04:53:43",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "面积超出规则区间"
+        },
+        {
+          "id": 222864,
+          "source": "fang",
+          "source_listing_id": "205168323",
+          "title": "尊爵堡法式大独栋 花园800平米 地下室全采光 真实在售",
+          "link": "https://cq.esf.fang.com/chushou/3_205168323.htm",
+          "district": "两江新区",
+          "community": "融创尊爵堡二期",
+          "address": "融创尊爵堡二期 汽博中心 金童路251号(北大附中对面)",
+          "total_price": 1380.0,
+          "unit_price": 18473.0,
+          "area": 747.02,
+          "layout": "独栋",
+          "rooms": null,
+          "halls": null,
+          "orientation": "南向",
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [
+            "满五",
+            "3km公园",
+            "3km购物中心",
+            "3km三甲医院"
+          ],
+          "fingerprint": "a3b997c82f4b0d1d7db02c4f4b055565f3a96a7b",
+          "data_quality_score": 91,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:53:24",
+          "last_seen_at": "2026-06-26 04:53:24",
+          "created_at": "2026-06-26 04:53:24",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "面积超出规则区间"
+        },
+        {
+          "id": 222722,
+          "source": "fang",
+          "source_listing_id": "205168324",
+          "title": "汽博尊爵堡法式大独栋 实得1200平米 花园800平米 急卖",
+          "link": "https://cq.esf.fang.com/chushou/3_205168324.htm",
+          "district": "两江新区",
+          "community": "融创尊爵堡二期",
+          "address": "融创尊爵堡二期 汽博中心 金童路251号(北大附中对面)",
+          "total_price": 1480.0,
+          "unit_price": 19891.0,
+          "area": 744.02,
+          "layout": "独栋",
+          "rooms": null,
+          "halls": null,
+          "orientation": "西向",
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [
+            "满五",
+            "3km公园",
+            "3km购物中心",
+            "3km三甲医院"
+          ],
+          "fingerprint": "7d910c2b514ab36f316ee1983c54da76af4d0f02",
+          "data_quality_score": 91,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:53:23",
+          "last_seen_at": "2026-06-26 04:53:23",
+          "created_at": "2026-06-26 04:53:23",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "面积超出规则区间"
+        },
+        {
+          "id": 222700,
+          "source": "fang",
+          "source_listing_id": "205097489",
+          "title": "渝北 法式融创玫瑰园 独别墅栋 视野好 全明地下室 一线江景",
+          "link": "https://cq.esf.fang.com/chushou/3_205097489.htm",
+          "district": "两江新区",
+          "community": "融创玫瑰园",
+          "address": "融创玫瑰园 礼嘉 重庆市金海大道99号",
+          "total_price": 1070.0,
+          "unit_price": 12617.0,
+          "area": 848.0,
+          "layout": "独栋",
+          "rooms": null,
+          "halls": null,
+          "orientation": "南向",
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [
+            "满二",
+            "人车分流",
+            "3km公园",
+            "3km购物中心",
+            "3km三甲医院"
+          ],
+          "fingerprint": "b3f85308d6501e67b5c77d925da3a60022ae18b4",
+          "data_quality_score": 91,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:53:22",
+          "last_seen_at": "2026-06-26 04:53:22",
+          "created_at": "2026-06-26 04:53:22",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "面积超出规则区间"
+        },
+        {
+          "id": 222686,
+          "source": "fang",
+          "source_listing_id": "205174972",
+          "title": "龙湖紫宸法式大独栋 花园600平米 地下室全采光 中庭位置",
+          "link": "https://cq.esf.fang.com/chushou/3_205174972.htm",
+          "district": "两江新区",
+          "community": "龙湖两江新宸紫宸",
+          "address": "龙湖两江新宸紫宸 礼嘉 渝北区礼嘉礼仁街26号",
+          "total_price": 1580.0,
+          "unit_price": 17694.0,
+          "area": 892.92,
+          "layout": "独栋",
+          "rooms": null,
+          "halls": null,
+          "orientation": "南向",
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [
+            "满五",
+            "人车分流",
+            "3km公园",
+            "3km购物中心",
+            "3km三甲医院",
+            "距国博线欢乐谷约775米"
+          ],
+          "fingerprint": "69eddb21f6f03838a10b9f750b187231c9e482da",
+          "data_quality_score": 91,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:53:22",
+          "last_seen_at": "2026-06-26 04:53:22",
+          "created_at": "2026-06-26 04:53:22",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "面积超出规则区间"
+        },
+        {
+          "id": 221742,
+          "source": "fang",
+          "source_listing_id": "1008870858",
+          "title": "蔡家龙湖椿山独栋大别野视野安逸花园安逸地下室全采光",
+          "link": "https://cq.esf.fang.com/chushou/8_1008870858.htm",
+          "district": "北碚",
+          "community": "龙湖椿山璟宸",
+          "address": "龙湖椿山璟宸 蔡家",
+          "total_price": 1200.0,
+          "unit_price": 19518.0,
+          "area": 614.83,
+          "layout": "卧室：6个",
+          "rooms": null,
+          "halls": null,
+          "orientation": "南向",
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [
+            "3km公园",
+            "3km三甲医院"
+          ],
+          "fingerprint": "ba38d82db8f36afb886870439b905391e0601ae0",
+          "data_quality_score": 91,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:52:53",
+          "last_seen_at": "2026-06-26 04:52:53",
+          "created_at": "2026-06-26 04:52:53",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "面积超出规则区间"
+        },
+        {
+          "id": 220011,
+          "source": "fang",
+          "source_listing_id": "205145881",
+          "title": "首付100多万买九曲河法式独栋花园500平单层200多平",
+          "link": "https://cq.esf.fang.com/chushou/3_205145881.htm",
+          "district": "两江新区",
+          "community": "融创玫瑰园",
+          "address": "融创玫瑰园 礼嘉 重庆市金海大道99号",
+          "total_price": 1030.0,
+          "unit_price": 17190.0,
+          "area": 599.18,
+          "layout": "独栋",
+          "rooms": null,
+          "halls": null,
+          "orientation": "南向",
+          "decoration": null,
+          "floor_text": null,
+          "floor_level": "unknown",
+          "build_year": null,
+          "house_age": null,
+          "tags": [
+            "满二",
+            "人车分流",
+            "3km公园",
+            "3km购物中心",
+            "3km三甲医院"
+          ],
+          "fingerprint": "551fec2d223efef386110c9a9062b4475da8eb9f",
+          "data_quality_score": 91,
+          "status": "active",
+          "first_seen_at": "2026-06-26 04:52:38",
+          "last_seen_at": "2026-06-26 04:52:38",
+          "created_at": "2026-06-26 04:52:38",
+          "updated_at": "2026-06-30 03:18:02",
+          "reason": "面积超出规则区间"
+        }
+      ],
+      "cleaning_steps": [
+        {
+          "name": "字段标准化",
+          "description": "统一来源、标题、链接、区县、小区、价格、面积、户型等字段。"
+        },
+        {
+          "name": "单位转换",
+          "description": "总价统一为万元，单价统一为元/平方米，面积统一为平方米。"
+        },
+        {
+          "name": "结构化解析",
+          "description": "从户型提取室/厅，从楼层文本归一 low/mid/high，从建成年份派生房龄。"
+        },
+        {
+          "name": "去重指纹",
+          "description": "按 source + fingerprint 去重，指纹不包含价格，避免价格变化被当成新房源。"
+        },
+        {
+          "name": "增量快照",
+          "description": "首次入库写快照；挂牌价或单价变化时追加 listing_snapshots。"
+        },
+        {
+          "name": "质量评分",
+          "description": "按关键字段缺失、价格异常、面积异常、建成年份异常扣分。"
+        },
+        {
+          "name": "来源分层",
+          "description": "旧库标为冷启动基线，新爬样本标为新标准采集样本，分析时分层使用。"
+        },
+        {
+          "name": "异常保留",
+          "description": "异常数据不物理删除，展示待复核原因，建模默认过滤。"
+        }
+      ],
+      "analysis_policy": {
+        "min_quality_score": 80,
+        "default_filters": [
+          "status in ('active','valid')",
+          "data_quality_score >= 80",
+          "total_price between 5 and 5000",
+          "unit_price between 1000 and 100000",
+          "area between 10 and 500",
+          "关键字段 title/link/district/total_price/unit_price/area 不为空"
+        ],
+        "source_rules": [
+          "旧库 *_legacy 只作为冷启动基线和规模对照，不直接证明真实性。",
+          "新采集来源 fang/anjuke_mobile/lianjia 使用当前标准字段和质量评分入库。",
+          "当新标准可用样本不足 50,000 时，系统采用冷启动混合基线；达到规模后切换为新标准样本优先。"
+        ],
+        "current_mode": "new_standard_primary"
+      }
+    }
+  }
+}

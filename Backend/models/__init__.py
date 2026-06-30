@@ -1,4 +1,4 @@
-from Backend.models.agent import AgentToolCall, GeneratedReport
+from Backend.models.agent import AgentSession, AgentToolCall, AgentTurn, GeneratedReport
 from Backend.models.analysis import AnalysisJob, ModelResult
 from Backend.models.crawl import CrawlLog, CrawlTask
 from Backend.models.listing import Listing

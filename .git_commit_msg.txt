@@ -1,0 +1,5 @@
+feat(dashboard): map uses real Gaode boundaries + data source transparency
+
+- Replace chongqing.json with authentic Gaode district boundary GeoJSON (38 districts)
+- Refactor ChongqingHeatMap: 5-level gradient fill, gold hover highlight, dark-blue selected state, ripple marker
+- Add data source explanation section at Dashboard bottom: source breakdown bars, authenticity declaration, traceability guide

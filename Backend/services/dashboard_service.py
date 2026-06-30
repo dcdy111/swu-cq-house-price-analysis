@@ -208,6 +208,120 @@ class DashboardService:
         return {"items": items[:limit]}
 
     @staticmethod
+    def district_value_profile(limit: int = 8) -> dict:
+        district_items = DashboardService.district_price(limit=100)["items"]
+        if not district_items:
+            return {
+                "items": [],
+                "methodology": DashboardService._district_value_methodology(),
+            }
+
+        avg_prices = [float(item["avg_unit_price"] or 0) for item in district_items if item["avg_unit_price"]]
+        counts = [int(item["listing_count"] or 0) for item in district_items]
+        qualities = [float(item["avg_quality"] or 0) for item in district_items if item["avg_quality"]]
+        spreads = [
+            float((item["max_unit_price"] or item["avg_unit_price"] or 0) - (item["min_unit_price"] or item["avg_unit_price"] or 0))
+            for item in district_items
+        ]
+
+        def min_max(value: float, values: list[float], reverse: bool = False) -> float:
+            if not values:
+                return 0.0
+            low = min(values)
+            high = max(values)
+            if high == low:
+                score = 100.0
+            else:
+                score = (value - low) / (high - low) * 100
+            return 100.0 - score if reverse else score
+
+        layout_rows = (
+            db.session.query(
+                Listing.district.label("district"),
+                Listing.layout.label("layout"),
+                db.func.count(Listing.id).label("count"),
+            )
+            .filter(_valid_listing_condition(), Listing.layout.isnot(None), Listing.layout != "")
+            .group_by(Listing.district, Listing.layout)
+            .all()
+        )
+        layout_map: dict[str, list[dict]] = {}
+        for row in layout_rows:
+            district = normalize_district_name(row.district)
+            layout_map.setdefault(district, []).append({"layout": row.layout, "count": _safe_int(row.count)})
+
+        items = []
+        for item in district_items:
+            district = item["district"]
+            avg_price = float(item["avg_unit_price"] or 0)
+            count = int(item["listing_count"] or 0)
+            quality = float(item["avg_quality"] or 0)
+            spread = float((item["max_unit_price"] or avg_price) - (item["min_unit_price"] or avg_price))
+            price_score = min_max(avg_price, avg_prices, reverse=True)
+            sample_score = min_max(float(count), [float(value) for value in counts])
+            quality_score = min_max(quality, qualities)
+            stability_score = min_max(spread, spreads, reverse=True)
+            value_index = round(
+                price_score * 0.40
+                + sample_score * 0.20
+                + quality_score * 0.25
+                + stability_score * 0.15,
+                2,
+            )
+            top_layouts = sorted(layout_map.get(district, []), key=lambda row: row["count"], reverse=True)[:3]
+            reasons = []
+            if price_score >= 70:
+                reasons.append("挂牌单价相对更低")
+            if sample_score >= 70:
+                reasons.append("样本量充足")
+            if quality_score >= 70:
+                reasons.append("平均质量分较高")
+            if stability_score >= 70:
+                reasons.append("价格区间相对集中")
+            if not reasons:
+                reasons.append("综合指标处于中等水平，适合作为对照区域")
+
+            items.append(
+                {
+                    "district": district,
+                    "value_index": value_index,
+                    "rank": 0,
+                    "avg_unit_price": round(avg_price, 2),
+                    "listing_count": count,
+                    "avg_quality": round(quality, 2),
+                    "price_stability_score": round(stability_score, 2),
+                    "sample_score": round(sample_score, 2),
+                    "price_score": round(price_score, 2),
+                    "quality_score": round(quality_score, 2),
+                    "dominant_layouts": top_layouts,
+                    "reasons": reasons[:3],
+                    "note": "区域性价比指数是基于挂牌价、样本量、质量分和价格稳定性的相对排序，不代表成交价或投资建议。",
+                }
+            )
+
+        items.sort(key=lambda row: (row["value_index"], row["listing_count"]), reverse=True)
+        limit = min(20, max(1, int(limit or 8)))
+        for index, item in enumerate(items[:limit], start=1):
+            item["rank"] = index
+        return {
+            "items": items[:limit],
+            "methodology": DashboardService._district_value_methodology(),
+        }
+
+    @staticmethod
+    def _district_value_methodology() -> dict:
+        return {
+            "name": "区域性价比指数",
+            "version": "district-value-v1",
+            "formula": "0.40*价格优势 + 0.20*样本量 + 0.25*质量分 + 0.15*价格稳定性",
+            "price_advantage": "区县平均挂牌单价越低，价格优势越高。",
+            "sample_score": "样本量按区县 min-max 标准化，样本越多越稳定。",
+            "quality_score": "区县平均数据质量分按 min-max 标准化。",
+            "stability_score": "区县挂牌单价最高值与最低值差距越小，稳定性越高。",
+            "boundary": "该指数只用于区域对比和答辩展示，不代表成交价、不构成购房或投资建议。",
+        }
+
+    @staticmethod
     def district_map() -> dict:
         chart_items = DashboardService.district_price(limit=100)["items"]
         items = [

@@ -69,6 +69,17 @@ def test_quality_report_source_layering_and_policy(client, app):
     assert data["abnormal_samples"][0]["reason"]
     assert data["analysis_policy"]["min_quality_score"] == 80
     assert len(data["cleaning_steps"]) >= 6
+    assert len(data["dimension_scores"]) == 6
+    assert {item["key"] for item in data["dimension_scores"]} == {
+        "completeness",
+        "uniqueness",
+        "consistency",
+        "timeliness",
+        "validity",
+        "verifiability",
+    }
+    assert data["methodology"]["version"] == "dq-v2.0"
+    assert "真实准确性" in data["methodology"]["verifiability_note"]
 
 
 def test_quality_report_can_be_persisted_and_queried(client, app):

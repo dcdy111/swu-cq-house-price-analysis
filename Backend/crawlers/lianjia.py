@@ -99,7 +99,11 @@ class LianjiaCrawler(BaseCrawler):
                     "orientation": orientation,
                     "decoration": decoration,
                     "floor_text": floor_text,
+                    "total_floors": self._extract_total_floors(floor_text),
                     "build_year": build_year,
+                    "metro_distance": self._extract_metro_distance(" ".join(info_parts + tags)),
+                    "building_type": self._extract_building_type(" ".join(info_parts + tags)),
+                    "has_elevator": self._extract_has_elevator(" ".join(info_parts + tags)),
                     "tags": tags[:8],
                     "status": "active",
                 }
@@ -160,7 +164,11 @@ class LianjiaCrawler(BaseCrawler):
                     "orientation": orientation,
                     "decoration": None,
                     "floor_text": None,
+                    "total_floors": self._extract_total_floors(desc_text),
                     "build_year": None,
+                    "metro_distance": self._extract_metro_distance(" ".join(desc_parts + tags)),
+                    "building_type": self._extract_building_type(" ".join(desc_parts + tags)),
+                    "has_elevator": self._extract_has_elevator(" ".join(desc_parts + tags)),
                     "tags": tags[:8],
                     "status": "active",
                 }
@@ -227,7 +235,11 @@ class LianjiaCrawler(BaseCrawler):
                     "orientation": orientation,
                     "decoration": None,
                     "floor_text": None,
+                    "total_floors": self._extract_total_floors(item.get("desc") or item.get("subTitle")),
                     "build_year": None,
+                    "metro_distance": self._extract_metro_distance(" ".join([str(item.get("desc") or ""), *[str(tag) for tag in tags]])),
+                    "building_type": self._extract_building_type(" ".join(desc_parts + [str(tag) for tag in tags])),
+                    "has_elevator": self._extract_has_elevator(" ".join(desc_parts + [str(tag) for tag in tags])),
                     "tags": [tag for tag in tags[:8] if tag],
                     "status": "active",
                 }
@@ -302,3 +314,34 @@ class LianjiaCrawler(BaseCrawler):
     def _source_id_from_link(link: str) -> str | None:
         match = re.search(r"(\d{6,})", link or "")
         return match.group(1) if match else None
+
+    @staticmethod
+    def _extract_total_floors(text: str | None) -> int | None:
+        match = re.search(r"共\s*(\d+)\s*层", text or "")
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _extract_metro_distance(text: str | None) -> int | None:
+        match = re.search(r"距.{0,40}?(\d+(?:\.\d+)?)\s*(米|m|km|公里)", text or "", re.IGNORECASE)
+        if not match:
+            return None
+        distance = float(match.group(1))
+        unit = match.group(2).lower()
+        return int(round(distance * 1000)) if unit in {"km", "公里"} else int(round(distance))
+
+    @staticmethod
+    def _extract_building_type(text: str | None) -> str | None:
+        merged = text or ""
+        for keyword in ("板楼", "塔楼", "别墅", "洋房", "平房", "板塔结合"):
+            if keyword in merged:
+                return keyword
+        return None
+
+    @staticmethod
+    def _extract_has_elevator(text: str | None) -> bool | None:
+        merged = text or ""
+        if "无电梯" in merged:
+            return False
+        if "有电梯" in merged or "电梯房" in merged:
+            return True
+        return None

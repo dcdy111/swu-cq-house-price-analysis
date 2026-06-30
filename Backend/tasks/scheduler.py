@@ -50,20 +50,32 @@ def init_scheduler(app: Flask):
     return scheduler
 
 
+def reconfigure_scheduler(app: Flask):
+    existing = app.extensions.get("scheduler")
+    if existing is not None:
+        try:
+            existing.shutdown(wait=False)
+        except Exception as exc:  # pragma: no cover - 调度器关闭失败时仅记录，不阻断设置保存。
+            app.logger.warning("后台调度关闭失败，继续重建: %s", exc)
+    app.extensions["scheduler"] = None
+    return init_scheduler(app)
+
+
 def scheduler_status() -> dict:
     scheduler = current_app.extensions.get("scheduler")
+    settings = SettingsService.scheduler_settings()
     if scheduler is None:
         return {
-            "enabled": bool(current_app.config.get("SCHEDULER_ENABLED")),
+            "enabled": bool(settings.get("enabled")),
             "running": False,
             "jobs": [],
-            "settings": SettingsService.scheduler_settings(),
+            "settings": settings,
             "note": "调度器未启动；测试环境或 SCHEDULER_ENABLED=false 时属于预期。",
         }
     return {
         "enabled": True,
         "running": scheduler.running,
-        "settings": SettingsService.scheduler_settings(),
+        "settings": settings,
         "jobs": [
             {
                 "id": job.id,
@@ -81,22 +93,24 @@ def run_scheduled_quality_report(app: Flask):
         return QualityService.save_report(report_type="scheduled")
 
 
-def run_scheduled_incremental_crawl(app: Flask):
+def run_scheduled_incremental_crawl(app: Flask, overrides: dict | None = None):
     with app.app_context():
-        settings = SettingsService.scheduler_settings()
+        settings = {**SettingsService.scheduler_settings(), **(overrides or {})}
         districts = [
             item.strip()
             for item in str(settings.get("incremental_crawl_districts") or "").split(",")
             if item.strip()
         ]
+        if isinstance(settings.get("districts"), list):
+            districts = [str(item).strip() for item in settings.get("districts") or [] if str(item).strip()]
         task = CrawlService.create_task(
             {
-                "name": "定时增量采集任务",
+                "name": settings.get("name") or "定时增量采集任务",
                 "source": settings.get("incremental_crawl_source") or "fang",
                 "districts": districts,
                 "max_pages": int(settings.get("incremental_crawl_max_pages") or 1),
                 "max_workers": int(settings.get("incremental_crawl_max_workers") or 3),
-                "mode": "scheduled_incremental",
+                "mode": settings.get("mode") or "scheduled_incremental",
             }
         )
         return CrawlService.run_task(task.id)

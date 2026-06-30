@@ -100,6 +100,12 @@ def test_dashboard_chart_apis(client):
     assert district_map_payload["data"]["items"][0]["count"] == 2
     assert district_map_payload["data"]["items"][0]["avgPrice"] == 14000
 
+    value_profile_payload = client.get("/api/charts/district-value-profile?limit=2").get_json()
+    assert value_profile_payload["code"] == 0
+    assert len(value_profile_payload["data"]["items"]) == 2
+    assert value_profile_payload["data"]["items"][0]["value_index"] >= 0
+    assert "不代表成交价" in value_profile_payload["data"]["methodology"]["boundary"]
+
     trend_payload = client.get("/api/charts/price-trend?months=12").get_json()
     assert trend_payload["code"] == 0
     assert trend_payload["data"]["items"][0]["month"] == "2026-06"

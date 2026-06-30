@@ -5,7 +5,16 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import { toast } from "sonner";
-import { api, reportPdfUrl, type AgentToolCall, type GeneratedReport } from "../../services/api";
+import {
+  api,
+  reportPdfUrl,
+  type AgentSessionDetail,
+  type AgentSessionSummary,
+  type ListingItem,
+  type AgentToolCall,
+  type AgentTurn,
+  type GeneratedReport,
+} from "../../services/api";
 
 interface Message {
   id: string;
@@ -13,6 +22,11 @@ interface Message {
   content: string;
   timestamp: string;
   sources?: { title: string; excerpt: string }[];
+  turnId?: string;
+  toolTraces?: ToolTrace[];
+  report?: GeneratedReport | null;
+  thinkTime?: string;
+  thinking?: string;
 }
 
 interface ToolTrace {
@@ -22,6 +36,19 @@ interface ToolTrace {
   output: unknown;
   duration: number;
   status: "success" | "error";
+}
+
+interface RecommendationCard {
+  listing: ListingItem;
+  recommendation_score: number;
+  score_breakdown?: Record<string, number>;
+  commute_proxy?: {
+    mode?: string;
+    has_metro_tag?: boolean;
+    metro_distance?: number | null;
+    label?: string;
+  };
+  reasons?: string[];
 }
 
 interface Session {
@@ -34,10 +61,10 @@ interface Session {
 }
 
 const SUGGESTIONS = [
-  "近12月重庆房价走势如何？",
-  "渝北区性价比最高的户型是？",
-  "帮我生成市场分析报告",
-  "哪个区县均价涨幅最大？",
+  "我刚工作，预算120万，想在重庆买通勤方便的二手房，有什么推荐？",
+  "预算150万，面积90平以上，渝北区有哪些性价比高的房源？",
+  "近12月重庆挂牌价走势如何？",
+  "帮我生成重庆二手房挂牌价市场分析报告",
 ];
 
 const INITIAL_SESSION: Session = {
@@ -53,7 +80,7 @@ const INITIAL_MESSAGES: Message[] = [
   {
     id: "welcome",
     role: "assistant",
-    content: "你好，我可以基于后端统计、采集日志、模型结果和报告工具回答问题。所有具体数值都会来自真实工具调用。",
+    content: "你好，我是重庆二手房置业分析助手。我可以基于后端统计、候选房源、采集日志、模型结果和报告工具，帮助你做预算匹配、区县比较、通勤便利代理分析和性价比筛选；所有具体数值都会来自真实工具调用。",
     timestamp: "刚刚",
   },
 ];
@@ -83,6 +110,74 @@ function toToolTrace(call: AgentToolCall): ToolTrace {
     duration: call.duration_ms,
     status: call.status,
   };
+}
+
+function formatRelativeTime(value?: string | null) {
+  if (!value) return "刚刚";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const diff = Date.now() - parsed.getTime();
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60_000))}分钟前`;
+  if (diff < 86_400_000) return `${Math.max(1, Math.floor(diff / 3_600_000))}小时前`;
+  return `${Math.max(1, Math.floor(diff / 86_400_000))}天前`;
+}
+
+function durationSeconds(start?: string | null, end?: string | null) {
+  if (!start || !end) return 0;
+  const startedAt = new Date(start).getTime();
+  const finishedAt = new Date(end).getTime();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) return 0;
+  return Math.max(1, Math.round((finishedAt - startedAt) / 1000));
+}
+
+function parseThinkTime(thinkTime?: string) {
+  if (!thinkTime) return 0;
+  const match = thinkTime.match(/(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function toSessionCard(item: AgentSessionSummary): Session {
+  return {
+    id: item.session_id,
+    title: item.title || "新的市场问数",
+    preview: "查看历史会话",
+    time: formatRelativeTime(item.updated_at ?? item.created_at),
+    messageCount: item.turn_count * 2 + 1,
+    pinned: false,
+  };
+}
+
+function assistantMessageFromTurn(turn: AgentTurn): Message {
+  const elapsed = durationSeconds(turn.created_at, turn.finished_at);
+  return {
+    id: `assistant-${turn.turn_id}`,
+    role: "assistant",
+    content: turn.answer || "本轮回答尚未生成完成。",
+    timestamp: formatRelativeTime(turn.finished_at ?? turn.created_at),
+    turnId: turn.turn_id,
+    toolTraces: (turn.tool_calls || []).map(toToolTrace),
+    report: turn.report ?? null,
+    thinkTime: elapsed ? `${elapsed}s` : undefined,
+    thinking: turn.thinking ?? undefined,
+  };
+}
+
+function messagesFromSession(detail: AgentSessionDetail): Message[] {
+  const items: Message[] = [...INITIAL_MESSAGES];
+  for (const turn of detail.turns || []) {
+    items.push({
+      id: `user-${turn.turn_id}`,
+      role: "user",
+      content: turn.question,
+      timestamp: formatRelativeTime(turn.created_at),
+      turnId: turn.turn_id,
+    });
+    if (turn.answer) {
+      items.push(assistantMessageFromTurn(turn));
+    }
+  }
+  return items;
 }
 
 function ThinkingBubble({ elapsed }: { elapsed: number }) {
@@ -144,8 +239,15 @@ function ThinkingChainBlock({ chain, thinkTime }: { chain: string; thinkTime: st
   );
 }
 
-function MessageBubble({ msg }: { msg: Message & { thinkTime?: string; thinking?: string } }) {
+function MessageBubble({
+  msg,
+  onSelectTurn,
+}: {
+  msg: Message;
+  onSelectTurn?: (message: Message) => void;
+}) {
   const isUser = msg.role === "user";
+  const hasActivity = !isUser && ((msg.toolTraces?.length ?? 0) > 0 || Boolean(msg.report));
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
@@ -156,19 +258,30 @@ function MessageBubble({ msg }: { msg: Message & { thinkTime?: string; thinking?
         {!isUser && msg.thinkTime && msg.thinking && (
           <ThinkingChainBlock chain={msg.thinking} thinkTime={msg.thinkTime} />
         )}
-        <div className="rounded-2xl px-4 py-3" style={{
-          background: isUser ? "#163A70" : "#fff",
-          border: isUser ? "none" : "1px solid #E5EAF2",
-          color: isUser ? "#fff" : "#1F2937",
-          fontSize: 13,
-          lineHeight: 1.75,
-          boxShadow: isUser ? "none" : "0 1px 3px rgba(0,0,0,0.04)",
-        }}>
+        <button
+          type="button"
+          onClick={() => hasActivity && onSelectTurn?.(msg)}
+          className="rounded-2xl px-4 py-3 text-left transition-colors"
+          style={{
+            background: isUser ? "#163A70" : "#fff",
+            border: isUser ? "none" : "1px solid #E5EAF2",
+            color: isUser ? "#fff" : "#1F2937",
+            fontSize: 13,
+            lineHeight: 1.75,
+            boxShadow: isUser ? "none" : "0 1px 3px rgba(0,0,0,0.04)",
+            cursor: hasActivity ? "pointer" : "default",
+          }}>
           <div dangerouslySetInnerHTML={{ __html: msg.content
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\n/g, '<br/>')
           }} />
-        </div>
+          {hasActivity && (
+            <div className="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1" style={{ background: "#EFF6FF", color: "#163A70", fontSize: 11, fontWeight: 600 }}>
+              <Activity size={11} />
+              查看本轮 {msg.toolTraces?.length ?? 0} 个工具
+            </div>
+          )}
+        </button>
         {/* Sources */}
         {msg.sources && msg.sources.length > 0 && (
           <div className="flex flex-col gap-1 mt-1">
@@ -186,6 +299,14 @@ function MessageBubble({ msg }: { msg: Message & { thinkTime?: string; thinking?
   );
 }
 
+function extractRecommendationCards(traces: ToolTrace[]): RecommendationCard[] {
+  const recommendTrace = traces.find(item => item.tool === "recommend_buy_options");
+  const items = recommendTrace && typeof recommendTrace.output === "object"
+    ? (recommendTrace.output as { items?: RecommendationCard[] }).items
+    : undefined;
+  return Array.isArray(items) ? items : [];
+}
+
 // Tool trace panel (right, collapsible)
 function ActivityPanel({
   open,
@@ -201,6 +322,7 @@ function ActivityPanel({
   report?: GeneratedReport | null;
 }) {
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
+  const recommendationCards = extractRecommendationCards(traces);
 
   return (
     <div
@@ -229,6 +351,11 @@ function ActivityPanel({
           <div className="px-4 py-3" style={{ borderBottom: "1px solid #E5EAF2" }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 8 }}>思考</div>
             <div className="flex flex-col gap-1.5">
+              {traces.length === 0 && (
+                <div className="rounded-lg px-3 py-2" style={{ background: "#F7F9FC", color: "#9CA3AF", fontSize: 12 }}>
+                  当前会话暂无已保存的工具轨迹。点击某一轮 AI 回答，可查看该轮的 tool input/output。
+                </div>
+              )}
               {traces.map(t => (
                 <Collapsible key={t.id} open={expandedTool === t.id} onOpenChange={v => setExpandedTool(v ? t.id : null)}>
                   <CollapsibleTrigger className="w-full flex items-center gap-2 text-left group">
@@ -257,6 +384,58 @@ function ActivityPanel({
           {/* Report preview */}
           <ScrollArea className="flex-1">
             <div className="px-4 py-3">
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 8 }}>候选房源</div>
+              <div className="flex flex-col gap-3 mb-4">
+                {recommendationCards.length === 0 && (
+                  <div className="rounded-xl px-3 py-3" style={{ border: "1px solid #E5EAF2", background: "#F7F9FC", color: "#9CA3AF", fontSize: 12 }}>
+                    当前轮次没有候选房源推荐结果。预算/通勤/面积类问题触发 `recommend_buy_options` 后，这里会展示卡片式候选房源。
+                  </div>
+                )}
+                {recommendationCards.map(item => (
+                  <div key={`${item.listing.id}-${item.listing.link}`} className="rounded-xl p-3" style={{ border: "1px solid #E5EAF2", background: "#fff" }}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div style={{ color: "#1F2937", fontSize: 12, fontWeight: 700, lineHeight: 1.6 }}>
+                        {item.listing.title}
+                      </div>
+                      <div className="px-2 py-1 rounded-full" style={{ background: "#EFF6FF", color: "#163A70", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                        {item.recommendation_score.toFixed(1)} 分
+                      </div>
+                    </div>
+                    <div style={{ color: "#6B7280", fontSize: 11, lineHeight: 1.7, marginTop: 6 }}>
+                      {item.listing.district} · {item.listing.community || "待补充小区"} · {item.listing.layout || "户型待补充"}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 mt-3">
+                      <div className="rounded-lg px-2.5 py-2" style={{ background: "#F8FAFC" }}>
+                        <div style={{ fontSize: 10, color: "#9CA3AF" }}>挂牌总价</div>
+                        <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>{item.listing.total_price ?? "-"} 万</div>
+                      </div>
+                      <div className="rounded-lg px-2.5 py-2" style={{ background: "#F8FAFC" }}>
+                        <div style={{ fontSize: 10, color: "#9CA3AF" }}>挂牌单价</div>
+                        <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>{item.listing.unit_price?.toLocaleString?.() ?? "-"} 元/㎡</div>
+                      </div>
+                      <div className="rounded-lg px-2.5 py-2" style={{ background: "#F8FAFC" }}>
+                        <div style={{ fontSize: 10, color: "#9CA3AF" }}>面积</div>
+                        <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>{item.listing.area ?? "-"} ㎡</div>
+                      </div>
+                      <div className="rounded-lg px-2.5 py-2" style={{ background: "#F8FAFC" }}>
+                        <div style={{ fontSize: 10, color: "#9CA3AF" }}>通勤代理</div>
+                        <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>
+                          {item.commute_proxy?.metro_distance ? `${item.commute_proxy.metro_distance} 米` : item.commute_proxy?.label ?? "-"}
+                        </div>
+                      </div>
+                    </div>
+                    {(item.reasons?.length ?? 0) > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {item.reasons?.map(reason => (
+                          <span key={reason} className="px-2 py-1 rounded-full" style={{ background: "#F7F9FC", color: "#4B5563", fontSize: 10 }}>
+                            {reason}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
               <div style={{ fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 8 }}>报告预览</div>
               <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #E5EAF2" }}>
                 <div className="px-3 py-2.5" style={{ background: "#163A70" }}>
@@ -300,12 +479,13 @@ function ActivityPanel({
 
 export function AgentPage() {
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<(Message & { thinkTime?: string; thinking?: string })[]>(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [thinking, setThinking] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
   const [toolTraces, setToolTraces] = useState<ToolTrace[]>([]);
   const [latestReport, setLatestReport] = useState<GeneratedReport | null>(null);
   const thinkElapsed = useTimer(thinking);
+  const [activityElapsed, setActivityElapsed] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Session management state
@@ -320,6 +500,69 @@ export function AgentPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, thinking]);
+
+  const selectMessageActivity = (message: Message) => {
+    setToolTraces(message.toolTraces ?? []);
+    setLatestReport(message.report ?? null);
+    setActivityElapsed(parseThinkTime(message.thinkTime));
+    setActivityOpen(true);
+  };
+
+  const openSession = async (sessionId: string) => {
+    setActiveSession(sessionId);
+    setMenuSession(null);
+    try {
+      const detail = await api.getAgentSession(sessionId);
+      const nextMessages = messagesFromSession(detail);
+      setMessages(nextMessages);
+      const assistantMessages = nextMessages.filter(item => item.role === "assistant");
+      const lastAssistant = assistantMessages[assistantMessages.length - 1];
+      if (lastAssistant) {
+        selectMessageActivity(lastAssistant);
+      } else {
+        setToolTraces([]);
+        setLatestReport(null);
+        setActivityElapsed(0);
+      }
+      setSessions(prev => {
+        const next = toSessionCard(detail);
+        const rest = prev.filter(item => item.id !== sessionId);
+        return [next, ...rest];
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "会话加载失败";
+      if (message.includes("会话不存在")) {
+        setMessages(INITIAL_MESSAGES);
+        setToolTraces([]);
+        setLatestReport(null);
+        setActivityElapsed(0);
+        return;
+      }
+      toast.error(message);
+    }
+  };
+
+  const loadPersistedSessions = async () => {
+    try {
+      const result = await api.getAgentSessions(50);
+      const items = result.items.map(toSessionCard);
+      if (items.length === 0) {
+        setSessions([INITIAL_SESSION]);
+        return;
+      }
+      setSessions(items);
+      const firstSessionId = items[0].id;
+      setActiveSession(firstSessionId);
+      await openSession(firstSessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "加载会话历史失败";
+      toast.error(message);
+    }
+  };
+
+  useEffect(() => {
+    void loadPersistedSessions();
+  }, []);
 
   const startRename = (id: string, currentTitle: string) => {
     setRenamingSession(id);
@@ -362,12 +605,13 @@ export function AgentPage() {
   };
 
   const createSession = () => {
-    const id = `S${Date.now()}`;
+    const id = `local-${Date.now()}`;
     setSessions(prev => [{ id, title: "新的市场问数", preview: "等待输入问题...", time: "刚刚", messageCount: 1, pinned: false }, ...prev]);
     setActiveSession(id);
-    setMessages([{ ...INITIAL_MESSAGES[0], id: `M${Date.now()}` }]);
+    setMessages([{ ...INITIAL_MESSAGES[0], id: `welcome-${Date.now()}` }]);
     setToolTraces([]);
     setLatestReport(null);
+    setActivityElapsed(0);
   };
 
   const sortedSessions = [...sessions].sort((a, b) => Number(b.pinned) - Number(a.pinned));
@@ -380,19 +624,37 @@ export function AgentPage() {
     setToolTraces([]);
     setLatestReport(null);
     setThinking(true);
+    const startedAt = Date.now();
     try {
       const result = await api.chatAgent({ session_id: activeSession, question: newMsg.content });
+      const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
       setThinking(false);
-      setMessages(prev => [...prev, {
+      const assistantMessage: Message = {
         id: `R${Date.now()}`, role: "assistant",
         content: result.answer,
         timestamp: "刚刚",
-        thinkTime: `${Math.max(1, thinkElapsed)}s`,
+        turnId: result.turn_id,
+        toolTraces: result.tool_calls.map(toToolTrace),
+        report: result.report ?? null,
+        thinkTime: `${elapsed}s`,
         thinking: result.thinking,
-      }]);
-      setToolTraces(result.tool_calls.map(toToolTrace));
-      setLatestReport(result.report ?? null);
-      setSessions(prev => prev.map(s => s.id === activeSession ? { ...s, preview: newMsg.content, messageCount: (s.messageCount || 0) + 2, time: "刚刚" } : s));
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+      setToolTraces(assistantMessage.toolTraces ?? []);
+      setLatestReport(assistantMessage.report ?? null);
+      setActivityElapsed(elapsed);
+      setSessions(prev => {
+        const existing = prev.find(item => item.id === result.session_id);
+        const nextSession: Session = {
+          id: result.session_id,
+          title: existing?.title && existing.title !== "新的市场问数" ? existing.title : newMsg.content.slice(0, 16),
+          preview: newMsg.content,
+          messageCount: existing ? existing.messageCount + 2 : 3,
+          time: "刚刚",
+          pinned: existing?.pinned ?? false,
+        };
+        return [nextSession, ...prev.filter(item => item.id !== result.session_id)];
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Agent 请求失败";
       setThinking(false);
@@ -425,9 +687,9 @@ export function AgentPage() {
                   onMouseEnter={() => setHoveredSession(s.id)}
                   onMouseLeave={() => { setHoveredSession(null); if (!showMenu) setMenuSession(null); }}>
                   <button
-                    className="text-left px-3 py-2.5 rounded-lg transition-colors w-full"
-                    style={{ background: isActive ? "#EFF6FF" : isHovered ? "#F7F9FC" : "transparent" }}
-                    onClick={() => { setActiveSession(s.id); setMenuSession(null); }}>
+                      className="text-left px-3 py-2.5 rounded-lg transition-colors w-full"
+                      style={{ background: isActive ? "#EFF6FF" : isHovered ? "#F7F9FC" : "transparent" }}
+                      onClick={() => { void openSession(s.id); }}>
                     {/* Pin indicator */}
                     {s.pinned && (
                       <Pin size={9} style={{ position: "absolute", top: 6, right: 28, color: "#163A70", opacity: 0.5 }} />
@@ -518,12 +780,15 @@ export function AgentPage() {
         <div className="flex-1 flex flex-col min-w-0" style={{ background: "#FAFBFC" }}>
           {/* Chat header */}
           <div className="flex items-center justify-between px-5 py-3 flex-shrink-0" style={{ background: "#fff", borderBottom: "1px solid #E5EAF2" }}>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-2 px-2.5 py-1 rounded-full" style={{ background: "#EFF6FF" }}>
-                <Sparkles size={12} style={{ color: "#163A70" }} />
-                <span style={{ fontSize: 12, color: "#163A70" }}>DeepSeek-V3</span>
-              </div>
-            </div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full" style={{ background: "#EFF6FF" }}>
+            <Sparkles size={12} style={{ color: "#163A70" }} />
+            <span style={{ fontSize: 12, color: "#163A70" }}>置业分析助手</span>
+          </div>
+          <div className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-full" style={{ background: "#F7F9FC", border: "1px solid #E5EAF2" }}>
+            <span style={{ fontSize: 12, color: "#6B7280" }}>预算/通勤/区县/性价比</span>
+          </div>
+        </div>
             <button
               onClick={() => setActivityOpen(v => !v)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors"
@@ -538,7 +803,14 @@ export function AgentPage() {
           {/* Messages */}
           <div className="flex-1 overflow-auto px-6 py-5">
             <div className="flex flex-col gap-5 max-w-2xl mx-auto">
-              {messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)}
+              <div className="rounded-2xl px-4 py-3" style={{ background: "#FFFFFF", border: "1px solid #E5EAF2", boxShadow: "0 1px 3px rgba(15, 23, 42, 0.04)" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#163A70", marginBottom: 6 }}>推荐问法</div>
+                <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.8 }}>
+                  适合拿它回答两类问题：一类是“重庆整体市场怎么样、哪个区县挂牌价更高”；另一类是“我预算多少、想买多大、是否看重通勤，系统能推荐哪些候选房源”。
+                  当前通勤便利度使用近地铁/地铁标签作为代理信号，会在回答里明确说明，不会伪装成真实通勤时间。
+                </div>
+              </div>
+              {messages.map(msg => <MessageBubble key={msg.id} msg={msg} onSelectTurn={selectMessageActivity} />)}
               {thinking && <ThinkingBubble elapsed={thinkElapsed} />}
               <div ref={bottomRef} />
             </div>
@@ -562,7 +834,7 @@ export function AgentPage() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage()}
-                placeholder="输入问题，例：近12月均价走势..."
+                placeholder="输入问题，例如：预算120万，想在渝北买通勤方便的二手房，有什么推荐？"
                 className="border-none shadow-none focus-visible:ring-0 p-0"
                 style={{ fontSize: 13, background: "transparent" }}
               />
@@ -579,7 +851,7 @@ export function AgentPage() {
         </div>
 
         {/* Right: Activity panel */}
-        <ActivityPanel open={activityOpen} onClose={() => setActivityOpen(false)} elapsed={thinkElapsed} traces={toolTraces} report={latestReport} />
+        <ActivityPanel open={activityOpen} onClose={() => setActivityOpen(false)} elapsed={thinking ? thinkElapsed : activityElapsed} traces={toolTraces} report={latestReport} />
       </div>
     </div>
   );

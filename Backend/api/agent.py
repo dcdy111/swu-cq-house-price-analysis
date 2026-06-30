@@ -24,6 +24,20 @@ def chat():
         return api_error(str(exc), status_code=400)
 
 
+@bp.get("/agent/sessions")
+def list_sessions():
+    limit = int(request.args.get("limit", 50))
+    return api_success(AgentService.list_sessions(limit=limit))
+
+
+@bp.get("/agent/sessions/<session_id>")
+def get_session(session_id: str):
+    session = AgentService.get_session(session_id)
+    if session is None:
+        return api_error("会话不存在", status_code=404)
+    return api_success(session.to_dict(include_turns=True))
+
+
 @bp.get("/reports/<int:report_id>")
 def get_report(report_id: int):
     report = AgentService.get_report(report_id)

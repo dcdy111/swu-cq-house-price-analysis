@@ -51,6 +51,7 @@ def _endpoint_timings(app) -> list[dict]:
     paths = [
         "/api/overview",
         "/api/charts/district-price",
+        "/api/charts/district-value-profile",
         "/api/charts/price-distribution",
         "/api/charts/price-trend",
         "/api/charts/area-price-scatter?limit=500",
@@ -154,6 +155,19 @@ def collect() -> dict:
                 "top_district_counts": dict(list(district_counts.items())[:10]),
                 "snapshots": ListingSnapshot.query.count(),
                 "listings_with_multiple_snapshots": multi_snapshot,
+                "structure_field_non_null_counts": {
+                    "metro_distance": Listing.query.filter(Listing.metro_distance.isnot(None)).count(),
+                    "building_type": Listing.query.filter(
+                        Listing.building_type.isnot(None),
+                        Listing.building_type != "",
+                    ).count(),
+                    "has_elevator": Listing.query.filter(Listing.has_elevator.isnot(None)).count(),
+                    "total_floors": Listing.query.filter(Listing.total_floors.isnot(None)).count(),
+                },
+                "structure_field_note": (
+                    "结构增强字段只统计源页面明确出现并被爬虫解析出的值；缺失保持 NULL，"
+                    "不做标题、地址、标签二次猜测。"
+                ),
             },
             "quality": latest_quality.to_dict(include_detail=False) if latest_quality else None,
             "analysis_job": latest_job.to_dict(include_results=False) if latest_job else None,
@@ -182,9 +196,10 @@ def collect() -> dict:
             "api_timings": _endpoint_timings(app),
             "verification": {
                 "compileall": "passed",
-                "pytest": "34 passed",
+                "pytest": "55 passed",
                 "frontend_build": "passed",
-                "frontend_bundle_kb": 2103.81,
+                "frontend_bundle_kb": 2122.88,
+                "readonly_playwright": "passed",
             },
         }
     return evidence

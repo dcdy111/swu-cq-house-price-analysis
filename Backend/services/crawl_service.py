@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from uuid import uuid4
 
 from flask import current_app
 
 from Backend.crawlers.registry import get_crawler, list_sources
 from Backend.extensions import db
 from Backend.models.crawl import CrawlLog, CrawlTask
+from Backend.models.listing import Listing
+from Backend.models.snapshot import ListingSnapshot
 from Backend.services.listing_service import ListingService
 from Backend.services.settings_service import SettingsService
 
@@ -50,6 +53,17 @@ class CrawlService:
             max_workers=max_workers,
             status="pending",
             total_pages=len(districts) * max_pages,
+            run_id=str(payload.get("run_id") or uuid4()),
+        )
+        task.set_evidence(
+            {
+                "run_id": task.run_id,
+                "mode": task.mode,
+                "districts": districts,
+                "max_pages": max_pages,
+                "max_workers": max_workers,
+                "status_history": [{"status": "pending", "at": datetime.utcnow().isoformat(sep=" ")}],
+            }
         )
         task.set_districts(districts)
         db.session.add(task)
@@ -173,6 +187,25 @@ class CrawlService:
         task.unchanged_count = 0
         task.snapshot_count = 0
         task.total_pages = len(task.districts) * task.max_pages
+        task.run_id = task.run_id or str(uuid4())
+        before_listing_count = db.session.query(db.func.count(Listing.id)).scalar() or 0
+        before_snapshot_count = db.session.query(db.func.count(ListingSnapshot.id)).scalar() or 0
+        evidence = dict(task.evidence)
+        status_history = list(evidence.get("status_history") or [])
+        status_history.append({"status": "running", "at": task.started_at.isoformat(sep=" ")})
+        evidence.update(
+            {
+                "run_id": task.run_id,
+                "mode": task.mode,
+                "before_listing_count": int(before_listing_count),
+                "before_snapshot_count": int(before_snapshot_count),
+                "districts": task.districts,
+                "max_pages": task.max_pages,
+                "max_workers": task.max_workers,
+                "status_history": status_history,
+            }
+        )
+        task.set_evidence(evidence)
         db.session.commit()
         CrawlService.add_log(
             task.id,
@@ -198,6 +231,7 @@ class CrawlService:
                             pending_future.cancel()
                         task.status = "canceled"
                         task.finished_at = datetime.utcnow()
+                        CrawlService._finalize_task_evidence(task.id, summary_override="任务被用户取消，已停止后续页面等待。")
                         db.session.commit()
                         CrawlService.add_log(task.id, "WARN", "任务已按用户请求取消，未完成页面已停止等待")
                         return task
@@ -243,6 +277,7 @@ class CrawlService:
 
             task.status = "success" if task.failed_pages == 0 else "partial_failed"
             task.finished_at = datetime.utcnow()
+            CrawlService._finalize_task_evidence(task.id)
             db.session.commit()
             CrawlService.add_log(
                 task.id,
@@ -258,6 +293,7 @@ class CrawlService:
             task.status = "failed"
             task.error_message = str(exc)
             task.finished_at = datetime.utcnow()
+            CrawlService._finalize_task_evidence(task.id, summary_override=f"任务失败：{exc}")
             db.session.commit()
             CrawlService.add_log(task.id, "ERROR", f"任务失败: {exc}")
             return task
@@ -270,6 +306,7 @@ class CrawlService:
         if task.status == "pending":
             task.status = "canceled"
             task.finished_at = datetime.utcnow()
+            CrawlService._finalize_task_evidence(task.id, summary_override="任务在执行前被取消。")
             db.session.commit()
             CrawlService.add_log(task.id, "WARN", "任务已取消，未开始执行")
             return task
@@ -297,3 +334,47 @@ class CrawlService:
         if final_url and final_url != result.url:
             parts.append(f"final_url={final_url}")
         return "；".join(parts)
+
+    @staticmethod
+    def _finalize_task_evidence(task_id: int, summary_override: str | None = None) -> None:
+        task = db.session.get(CrawlTask, task_id)
+        if task is None:
+            return
+        after_listing_count = db.session.query(db.func.count(Listing.id)).scalar() or 0
+        after_snapshot_count = db.session.query(db.func.count(ListingSnapshot.id)).scalar() or 0
+        evidence = dict(task.evidence)
+        before_listing_count = int(evidence.get("before_listing_count") or 0)
+        before_snapshot_count = int(evidence.get("before_snapshot_count") or 0)
+        status_history = list(evidence.get("status_history") or [])
+        if task.finished_at:
+            status_history.append({"status": task.status, "at": task.finished_at.isoformat(sep=" ")})
+        recent_logs = (
+            CrawlLog.query.filter_by(task_id=task.id)
+            .order_by(CrawlLog.created_at.desc())
+            .limit(8)
+            .all()
+        )
+        summary = summary_override or (
+            f"任务状态 {task.status}；新增 {task.inserted_count}，价格变化 {task.updated_count}，"
+            f"未变 {task.unchanged_count}，新增快照 {task.snapshot_count}，失败页 {task.failed_pages}。"
+        )
+        evidence.update(
+            {
+                "run_id": task.run_id,
+                "after_listing_count": int(after_listing_count),
+                "after_snapshot_count": int(after_snapshot_count),
+                "listing_delta": int(after_listing_count) - before_listing_count,
+                "new_snapshot_count": int(after_snapshot_count) - before_snapshot_count,
+                "inserted_count": int(task.inserted_count or 0),
+                "updated_count": int(task.updated_count or 0),
+                "unchanged_count": int(task.unchanged_count or 0),
+                "failed_pages": int(task.failed_pages or 0),
+                "status": task.status,
+                "started_at": task.started_at.isoformat(sep=" ") if task.started_at else None,
+                "finished_at": task.finished_at.isoformat(sep=" ") if task.finished_at else None,
+                "log_summary": summary,
+                "recent_logs": [item.to_dict() for item in reversed(recent_logs)],
+                "status_history": status_history,
+            }
+        )
+        task.set_evidence(evidence)

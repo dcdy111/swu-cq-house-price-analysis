@@ -125,6 +125,27 @@ def test_get_analysis_job_and_latest(client):
     assert latest_payload["data"]["results"][0]["result_type"] == "regression"
 
 
+def test_tune_job_runs_real_parameter_search(client):
+    seed_analysis_data()
+
+    response = client.post("/api/analysis/jobs", json={"job_type": "tune", "max_samples": 200})
+    payload = response.get_json()
+
+    assert response.status_code == 201
+    assert payload["code"] == 0
+    data = payload["data"]
+    assert data["job_type"] == "tune"
+    regression = next(item for item in data["results"] if item["result_type"] == "regression")
+    assert regression["metrics"]["search_candidates"] >= 2
+    assert regression["metrics"]["cv_folds"] >= 2
+    assert regression["metrics"]["best_params"]
+    assert "tuning_search" in regression["evidence"]
+    assert regression["artifacts"]["tuning"]["search_algorithm"] == "sklearn.model_selection.RandomizedSearchCV"
+    candidates = [item for item in data["results"] if item["result_type"] == "regression_candidate"]
+    assert len(candidates) >= 2
+    assert any(item["metrics"]["tuning_status"] == "searched" for item in candidates)
+
+
 def test_latest_results_by_type_keeps_full_demo_chain(client):
     seed_analysis_data()
     all_job = client.post("/api/analysis/jobs", json={"job_type": "all"}).get_json()["data"]

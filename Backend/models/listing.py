@@ -33,8 +33,12 @@ class Listing(db.Model):
     decoration = db.Column(db.String(64))
     floor_text = db.Column(db.String(128))
     floor_level = db.Column(db.String(32))
+    total_floors = db.Column(db.Integer)
     build_year = db.Column(db.Integer)
     house_age = db.Column(db.Integer)
+    metro_distance = db.Column(db.Integer)
+    building_type = db.Column(db.String(64))
+    has_elevator = db.Column(db.Boolean)
     tags_json = db.Column(db.Text)
     fingerprint = db.Column(db.String(64), nullable=False)
     data_quality_score = db.Column(db.Integer, nullable=False, default=100)
@@ -79,8 +83,12 @@ class Listing(db.Model):
             "decoration": self.decoration,
             "floor_text": self.floor_text,
             "floor_level": self.floor_level,
+            "total_floors": self.total_floors,
             "build_year": self.build_year,
             "house_age": self.house_age,
+            "metro_distance": self.metro_distance,
+            "building_type": self.building_type,
+            "has_elevator": self.has_elevator,
             "tags": self.tags,
             "fingerprint": self.fingerprint,
             "data_quality_score": self.data_quality_score,
@@ -90,4 +98,3 @@ class Listing(db.Model):
             "created_at": self.created_at.isoformat(sep=" ") if self.created_at else None,
             "updated_at": self.updated_at.isoformat(sep=" ") if self.updated_at else None,
         }
-
