@@ -15,6 +15,19 @@
   --state-danger: #DC2626;
   --cq-accent: #E67E22;
 
+  /* Dark theme (学术数据大屏) */
+  --dark-bg-primary: #0D1B2A;
+  --dark-bg-secondary: #1B263B;
+  --dark-bg-tertiary: #2D3A4F;
+  --dark-card-bg: rgba(255, 255, 255, 0.05);
+  --dark-card-border: rgba(255, 255, 255, 0.1);
+  --dark-card-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --dark-text-primary: #F8FAFC;
+  --dark-text-secondary: rgba(255, 255, 255, 0.6);
+  --dark-text-muted: rgba(255, 255, 255, 0.4);
+  --dark-accent: #4F7DBD;
+  --dark-glow: rgba(79, 125, 189, 0.4);
+
   --font-size: 16px;
   --background: #ffffff;
   --foreground: oklch(0.145 0 0);
@@ -192,4 +205,258 @@
     font-weight: var(--font-weight-normal);
     line-height: 1.5;
   }
+}
+
+/* ========== 学术数据大屏 深色主题 ========== */
+.dark-theme {
+  background: linear-gradient(135deg, var(--dark-bg-primary) 0%, var(--dark-bg-secondary) 100%);
+  min-height: 100vh;
+  color: var(--dark-text-primary);
+}
+
+/* 玻璃态卡片 */
+.glass-card {
+  background: var(--dark-card-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--dark-card-border);
+  box-shadow: var(--dark-card-shadow);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(79, 125, 189, 0.3);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 20px var(--dark-glow);
+}
+
+/* KPI 卡片玻璃态 */
+.kpi-glass {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.kpi-glass:hover {
+  transform: translateY(-3px) scale(1.02);
+  border-color: rgba(79, 125, 189, 0.4);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 30px rgba(79, 125, 189, 0.2);
+}
+
+/* 侧边栏深色主题 */
+.sidebar-dark {
+  background: linear-gradient(180deg, var(--dark-bg-primary) 0%, var(--dark-bg-secondary) 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* 导航项悬浮效果 */
+.nav-item-dark {
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.nav-item-dark::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 0;
+  background: linear-gradient(180deg, #4F7DBD 0%, #E67E22 100%);
+  border-radius: 0 2px 2px 0;
+  transition: height 0.3s ease;
+}
+
+.nav-item-dark:hover::before,
+.nav-item-dark.active::before {
+  height: 60%;
+}
+
+.nav-item-dark.active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* 呼吸灯效果 */
+@keyframes breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.breathe {
+  animation: breathe 3s ease-in-out infinite;
+}
+
+/* 渐变光效 */
+.glow-border {
+  position: relative;
+}
+
+.glow-border::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(79, 125, 189, 0.5), rgba(230, 126, 34, 0.3));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* 数字滚动动画 */
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.count-animate {
+  animation: countUp 0.6s ease-out forwards;
+}
+
+/* 卡片入场动画 */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.5s ease-out forwards;
+}
+
+/* 渐变文字 */
+.gradient-text {
+  background: linear-gradient(135deg, #4F7DBD 0%, #E67E22 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 装饰性光点 */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(79, 125, 189, 0.5); }
+  50% { box-shadow: 0 0 20px rgba(79, 125, 189, 0.8), 0 0 30px rgba(79, 125, 189, 0.4); }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* 滚动条美化 */
+.dark-theme ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dark-theme ::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+}
+
+.dark-theme ::-webkit-scrollbar-thumb {
+  background: rgba(79, 125, 189, 0.4);
+  border-radius: 3px;
+}
+
+.dark-theme ::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 125, 189, 0.6);
+}
+
+/* 深色背景下的输入框 */
+.dark-input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--dark-text-primary);
+  transition: all 0.2s ease;
+}
+
+.dark-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(79, 125, 189, 0.5);
+  box-shadow: 0 0 0 3px rgba(79, 125, 189, 0.1);
+  outline: none;
+}
+
+.dark-input::placeholder {
+  color: var(--dark-text-muted);
+}
+
+/* 深色背景下的按钮 */
+.dark-button {
+  background: linear-gradient(135deg, rgba(79, 125, 189, 0.2) 0%, rgba(79, 125, 189, 0.1) 100%);
+  border: 1px solid rgba(79, 125, 189, 0.3);
+  color: var(--dark-text-primary);
+  transition: all 0.2s ease;
+}
+
+.dark-button:hover {
+  background: linear-gradient(135deg, rgba(79, 125, 189, 0.3) 0%, rgba(79, 125, 189, 0.2) 100%);
+  border-color: rgba(79, 125, 189, 0.5);
+  transform: translateY(-1px);
+}
+
+/* 图表容器深色样式 */
+.chart-container-dark {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+/* 表格深色样式 */
+.table-dark th {
+  background: rgba(79, 125, 189, 0.1);
+  color: var(--dark-text-secondary);
+  font-weight: 600;
+}
+
+.table-dark td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--dark-text-primary);
+}
+
+.table-dark tr:hover td {
+  background: rgba(79, 125, 189, 0.05);
+}
+
+/* 状态标签深色样式 */
+.status-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.status-badge-success {
+  background: rgba(22, 163, 74, 0.2);
+  color: #4ADE80;
+  border: 1px solid rgba(22, 163, 74, 0.3);
+}
+
+.status-badge-warning {
+  background: rgba(245, 158, 11, 0.2);
+  color: #FBBF24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.status-badge-danger {
+  background: rgba(220, 38, 38, 0.2);
+  color: #F87171;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+}
+
+.status-badge-info {
+  background: rgba(79, 125, 189, 0.2);
+  color: #60A5FA;
+  border: 1px solid rgba(79, 125, 189, 0.3);
 }

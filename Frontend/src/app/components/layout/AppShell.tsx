@@ -7,7 +7,7 @@ export function AppShell({ onLogout }: { onLogout: () => void }) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "#F7F9FC" }}>
+    <div className="flex h-screen overflow-hidden dark-theme">
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
       <div className="flex flex-col flex-1 min-w-0">
         <Topbar onLogout={onLogout} />
