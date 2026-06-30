@@ -28,6 +28,7 @@ import {
   DashboardOverview,
   DistrictMapItem,
   DistrictPriceItem,
+  DistrictValueProfileItem,
   LayoutDistributionItem,
   PriceDistributionItem,
   PriceTrendItem,
@@ -94,6 +95,8 @@ export function DashboardPage() {
   const [scatterData, setScatterData] = useState<AreaPricePoint[]>([]);
   const [layoutData, setLayoutData] = useState<LayoutDistributionItem[]>([]);
   const [priceDistribution, setPriceDistribution] = useState<PriceDistributionItem[]>([]);
+  const [valueProfiles, setValueProfiles] = useState<DistrictValueProfileItem[]>([]);
+  const [valueMethodology, setValueMethodology] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,16 +106,19 @@ export function DashboardPage() {
       api.getOverview(),
       api.getDistrictPriceChart(38),
       api.getDistrictMap(),
+      api.getDistrictValueProfile(6),
       api.getPriceTrendChart(12),
       api.getAreaPriceScatter(500),
       api.getLayoutDistribution(8),
       api.getPriceDistributionChart(),
     ])
-      .then(([overviewData, districtData, districtMap, trend, scatter, layout, distribution]) => {
+      .then(([overviewData, districtData, districtMap, valueProfile, trend, scatter, layout, distribution]) => {
         const districts = mapDistricts(districtMap.items);
         setOverview(overviewData);
         setDistrictPrice(districtData.items);
         setMapData(districts);
+        setValueProfiles(valueProfile.items);
+        setValueMethodology(valueProfile.methodology.boundary);
         setTrendData(trend.items);
         setScatterData(scatter.items);
         setLayoutData(layout.items);
@@ -127,6 +133,8 @@ export function DashboardPage() {
         setOverview(null);
         setDistrictPrice([]);
         setMapData([]);
+        setValueProfiles([]);
+        setValueMethodology("");
         setTrendData([]);
         setScatterData([]);
         setLayoutData([]);
@@ -240,6 +248,57 @@ export function DashboardPage() {
           <KpiCard key={kpi.title} {...kpi} />
         ))}
       </div>
+
+      <SectionCard
+        title="区域性价比指数"
+        subtitle="基于挂牌价、样本量、质量分和价格稳定性的可解释区县画像"
+      >
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {valueProfiles.length === 0 && (
+            <div style={{ color: "#9CA3AF", fontSize: 13 }}>暂无区域画像数据，请先确认区县均价接口可用。</div>
+          )}
+          {valueProfiles.map(item => (
+            <div key={item.district} className="rounded-xl p-4" style={{ border: "1px solid #E5EAF2", background: "#fff" }}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div style={{ fontSize: 12, color: "#9CA3AF" }}>TOP {item.rank}</div>
+                  <div style={{ fontSize: 16, color: "#163A70", fontWeight: 800, marginTop: 2 }}>{item.district}</div>
+                </div>
+                <div className="rounded-full px-3 py-1" style={{ background: "#EFF6FF", color: "#163A70", fontSize: 13, fontWeight: 800 }}>
+                  {fmt(item.value_index, 1)}
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mt-3">
+                <div className="rounded-lg px-2.5 py-2" style={{ background: "#F8FAFC" }}>
+                  <div style={{ fontSize: 10, color: "#9CA3AF" }}>挂牌均价</div>
+                  <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>{fmt(item.avg_unit_price)} 元/㎡</div>
+                </div>
+                <div className="rounded-lg px-2.5 py-2" style={{ background: "#F8FAFC" }}>
+                  <div style={{ fontSize: 10, color: "#9CA3AF" }}>样本量</div>
+                  <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>{fmt(item.listing_count)} 套</div>
+                </div>
+                <div className="rounded-lg px-2.5 py-2" style={{ background: "#F8FAFC" }}>
+                  <div style={{ fontSize: 10, color: "#9CA3AF" }}>质量分</div>
+                  <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 700 }}>{fmt(item.avg_quality, 1)}</div>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {item.reasons.map(reason => (
+                  <span key={reason} className="rounded-full px-2 py-1" style={{ background: "#F7F9FC", color: "#4B5563", fontSize: 11 }}>
+                    {reason}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-3" style={{ fontSize: 11, color: "#6B7280", lineHeight: 1.7 }}>
+                主力户型：{item.dominant_layouts.length ? item.dominant_layouts.map(layout => `${layout.layout}(${layout.count})`).join("、") : "暂无"}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 rounded-lg px-3 py-2" style={{ background: "#FFF7ED", border: "1px solid #FED7AA", color: "#9A3412", fontSize: 12, lineHeight: 1.7 }}>
+          {valueMethodology || "区域性价比指数只用于区域对比，不代表成交价或投资建议。"}
+        </div>
+      </SectionCard>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <SectionCard
@@ -398,6 +457,106 @@ export function DashboardPage() {
           </SectionCard>
         </div>
       </div>
+
+      <SectionCard
+        title="数据来源说明"
+        subtitle="可追溯性 · 真实性声明"
+        noPad
+      >
+        <div className="p-5">
+          {(() => {
+            const total = overview?.source_summary.reduce((s, x) => s + x.listing_count, 0) ?? 0;
+            const sourceMap: Record<string, { label: string; url: string; description: string }> = {
+              fang: {
+                label: "房天下",
+                url: "https://cq.esf.fang.com",
+                description: "重庆房天下二手房列表页，通过 requests + BeautifulSoup 直接解析 HTML，属于确定性程序采集，数据真实存储于 listings.link 字段",
+              },
+              fang_legacy: {
+                label: "房天下（旧库）",
+                url: "https://cq.esf.fang.com",
+                description: "早期导入的房天下数据，按 link 域名识别来源，数据经清洗后落库",
+              },
+              lianjia: {
+                label: "链家",
+                url: "https://cq.lianjia.com",
+                description: "重庆链家二手房页面，通过 requests + BeautifulSoup 解析，数据真实存储于 listings.link 字段",
+              },
+              lianjia_legacy: {
+                label: "链家（旧库）",
+                url: "https://cq.lianjia.com",
+                description: "早期导入的链家数据，按 link 域名识别来源，数据经清洗后落库",
+              },
+              anjuke_mobile: {
+                label: "安居客",
+                url: "https://m.anjuke.com",
+                description: "安居客移动端页面，通过 requests + BeautifulSoup 解析，数据真实存储于 listings.link 字段",
+              },
+              anjuke_legacy: {
+                label: "安居客（旧库）",
+                url: "https://m.anjuke.com",
+                description: "早期导入的安居客数据，按 link 域名识别来源，数据经清洗后落库",
+              },
+            };
+
+            return (
+              <div className="flex flex-col gap-4">
+                <div
+                  className="rounded-lg p-4"
+                  style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: 13, color: "#166534", lineHeight: 1.8 }}
+                >
+                  <strong>真实性声明：</strong>本系统所有 {fmt(total)} 条房源数据均为真实网络采集，来源可追溯，不存在人工捏造。每条记录均有对应 <code style={{ background: "#DCFCE7", padding: "1px 4px", borderRadius: 4 }}>link</code> 字段指向原始平台 URL。
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {(overview?.source_summary ?? []).map(item => {
+                    const info = sourceMap[item.source];
+                    const pct = total > 0 ? ((item.listing_count / total) * 100).toFixed(1) : "0.0";
+                    return (
+                      <div
+                        key={item.source}
+                        className="rounded-lg p-3"
+                        style={{ background: "#F7F9FC", border: "1px solid #E5EAF2" }}
+                      >
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#1F2937" }}>{info?.label ?? item.source}</span>
+                          <span style={{ fontSize: 11, color: "#6B7280" }}>{pct}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full mb-2" style={{ background: "#E5EAF2" }}>
+                          <div
+                            className="h-full rounded-full"
+                            style={{ width: `${pct}%`, background: "#163A70", transition: "width 0.6s" }}
+                          />
+                        </div>
+                        <div style={{ fontSize: 11, color: "#6B7280" }}>
+                          {fmt(item.listing_count)} 套 · 均单价 {fmt(item.avg_unit_price)} 元/㎡
+                        </div>
+                        <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4, lineHeight: 1.5 }}>
+                          {info?.description ?? "来源信息未定义"}
+                        </div>
+                        {info && (
+                          <a
+                            href={info.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 11, color: "#3B82F6", display: "inline-block", marginTop: 4 }}
+                          >
+                            查看原始平台 →
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="rounded-lg p-3" style={{ background: "#FFF7ED", border: "1px solid #FDE68A", fontSize: 12, color: "#92400E" }}>
+                  <strong>追溯方式：</strong>在"房源管理"页面点击任意一条记录的 <code style={{ background: "#FEF3C7", padding: "1px 4px", borderRadius: 4 }}>原始链接</code> 按钮即可打开原始平台页面进行核实。每条记录的 <code style={{ background: "#FEF3C7", padding: "1px 4px", borderRadius: 4 }}>source</code>、<code style={{ background: "#FEF3C7", padding: "1px 4px", borderRadius: 4 }}>source_listing_id</code> 字段均可在数据库中查询验证。
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      </SectionCard>
     </div>
   );
 }
