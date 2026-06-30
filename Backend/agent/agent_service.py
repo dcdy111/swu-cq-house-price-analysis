@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from uuid import uuid4
 
-from Backend.agent.deepseek_client import DeepSeekClient
+from Backend.agent.deepseek_client import DeepSeekClient, DeepSeekInvocationError
 from Backend.agent.tool_registry import ToolRegistry
 from Backend.extensions import db
 from Backend.models.agent import AgentSession, AgentToolCall, AgentTurn, GeneratedReport
@@ -47,6 +47,7 @@ DISTRICT_KEYWORDS = [
     "巴南",
     "北碚",
 ]
+LEGACY_LOCAL_SESSION_PREFIX = "local-"
 
 
 class AgentService:
@@ -57,7 +58,12 @@ class AgentService:
         question = str(payload.get("question") or payload.get("message") or "").strip()
         if not question:
             raise ValueError("question 不能为空")
-        session_id = str(payload.get("session_id") or f"agent-{uuid4().hex[:10]}")
+        requested_session_id = str(payload.get("session_id") or "").strip()
+        session_id = (
+            requested_session_id
+            if requested_session_id and not self._is_legacy_local_session_id(requested_session_id)
+            else f"agent-{uuid4().hex[:10]}"
+        )
         turn_id = f"turn-{uuid4().hex[:12]}"
         session = self._ensure_session(session_id, question)
         turn = AgentTurn(
@@ -83,21 +89,44 @@ class AgentService:
             if call["status"] == "success":
                 evidence[self._evidence_key(step["tool"])] = call["tool_result"]
 
-        fallback_answer = self._compose_answer(question, evidence, tool_calls)
-        answer, model_name = DeepSeekClient.generate_answer(question, evidence, fallback_answer)
-        answer = self._ensure_answer_sections(answer, fallback_answer)
-        self._persist_report_runtime(evidence, tool_calls, model_name, answer)
         thinking_summary = self._execution_summary(tool_calls)
         report_id = ((evidence.get("report") or {}).get("report") or {}).get("id")
-        turn.answer = answer
-        turn.thinking_summary = thinking_summary
-        turn.model_name = model_name
-        turn.status = "success"
-        turn.report_id = int(report_id) if report_id else None
-        turn.finished_at = datetime.utcnow()
-        turn.set_tool_call_ids([int(item["id"]) for item in tool_calls if item.get("id")])
-        session.updated_at = turn.finished_at
-        db.session.commit()
+        tool_call_ids = [int(item["id"]) for item in tool_calls if item.get("id")]
+        try:
+            answer, model_name = DeepSeekClient.generate_answer(question, evidence)
+            answer = str(answer or "").strip()
+            if not answer:
+                raise DeepSeekInvocationError("DeepSeek 返回空回答")
+            self._persist_report_runtime(evidence, tool_calls, model_name, answer)
+            turn.answer = answer
+            turn.thinking_summary = thinking_summary
+            turn.model_name = model_name
+            turn.status = "success"
+            turn.report_id = int(report_id) if report_id else None
+            turn.finished_at = datetime.utcnow()
+            turn.set_tool_call_ids(tool_call_ids)
+            session.updated_at = turn.finished_at
+            db.session.commit()
+        except DeepSeekInvocationError as exc:
+            turn.answer = None
+            turn.thinking_summary = thinking_summary
+            turn.model_name = None
+            turn.status = "failed"
+            turn.report_id = int(report_id) if report_id else None
+            turn.finished_at = datetime.utcnow()
+            turn.set_tool_call_ids(tool_call_ids)
+            session.updated_at = turn.finished_at
+            db.session.commit()
+            raise AgentChatError(
+                str(exc),
+                {
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "tool_calls": tool_calls,
+                    "report": evidence.get("report", {}).get("report"),
+                    "execution": thinking_summary,
+                },
+            ) from exc
         return {
             "session_id": session_id,
             "turn_id": turn_id,
@@ -108,7 +137,6 @@ class AgentService:
             "model": model_name,
             "turn": turn.to_dict(include_tool_calls=True),
         }
-
     @staticmethod
     def _ensure_session(session_id: str, question: str) -> AgentSession:
         session = db.session.get(AgentSession, session_id)
@@ -125,12 +153,23 @@ class AgentService:
 
     @staticmethod
     def list_sessions(limit: int = 50) -> dict:
-        rows = AgentSession.query.order_by(AgentSession.updated_at.desc()).limit(min(100, max(1, limit))).all()
+        rows = (
+            AgentSession.query.filter(AgentSession.session_id.notlike(f"{LEGACY_LOCAL_SESSION_PREFIX}%"))
+            .order_by(AgentSession.updated_at.desc())
+            .limit(min(100, max(1, limit)))
+            .all()
+        )
         return {"items": [row.to_dict(include_turns=False) for row in rows]}
 
     @staticmethod
     def get_session(session_id: str) -> AgentSession | None:
+        if AgentService._is_legacy_local_session_id(session_id):
+            return None
         return db.session.get(AgentSession, session_id)
+
+    @staticmethod
+    def _is_legacy_local_session_id(session_id: str | None) -> bool:
+        return str(session_id or "").strip().lower().startswith(LEGACY_LOCAL_SESSION_PREFIX)
 
     @staticmethod
     def _persist_report_runtime(evidence: dict, tool_calls: list[dict], model_name: str, answer: str) -> None:
@@ -143,22 +182,13 @@ class AgentService:
         report_evidence = dict(report.evidence or {})
         report_evidence["agent_runtime"] = {
             "response_model": model_name,
-            "deepseek_used": "fallback" not in model_name,
-            "grounding_guard_applied": model_name.endswith("+grounding-guard"),
+            "deepseek_used": True,
+            "grounding_guard_applied": True,
             "tool_names": [item.get("tool_name") for item in tool_calls],
             "answer_length": len(answer or ""),
         }
         report.set_evidence(report_evidence)
         db.session.commit()
-
-    @staticmethod
-    def _ensure_answer_sections(answer: str, fallback_answer: str) -> str:
-        text = str(answer or "").strip()
-        if all(label in text for label in ["结论", "关键证据", "可执行建议"]):
-            return text
-        if "关键证据" in text and "可执行建议" in text:
-            return f"**结论**\n{text}"
-        return fallback_answer
 
     def list_tools(self) -> dict:
         return {"items": self.registry.list_tools()}
@@ -315,87 +345,6 @@ class AgentService:
             "get_model_result": "model",
             "generate_report": "report",
         }.get(tool_name, tool_name)
-
-    def _compose_answer(self, question: str, evidence: dict, tool_calls: list[dict]) -> str:
-        market = evidence.get("market") or {}
-        buyer_options = evidence.get("buyer_options") or {}
-        model = evidence.get("model") or {}
-        crawl = evidence.get("crawl") or {}
-        report = evidence.get("report") or {}
-
-        if report.get("report"):
-            item = report["report"]
-            return "\n".join(
-                [
-                    "**结论**",
-                    f"已生成《{item['title']}》，报告编号 #{item['id']}，内容和 evidence_json 已保存到 generated_reports。",
-                    "",
-                    "**关键证据**",
-                    self._market_evidence_line(market),
-                    self._model_evidence_line(model),
-                    "",
-                    "**可执行建议**",
-                    f"可通过 `/api/reports/{item['id']}` 查看报告详情，并在答辩时展示本次工具调用记录。",
-                ]
-            )
-
-        if crawl:
-            summary = crawl.get("summary") or {}
-            return "\n".join(
-                [
-                    "**结论**",
-                    f"当前采集任务：运行中 {summary.get('running', 0)} 个，成功 {summary.get('success', 0)} 个，失败 {summary.get('failed', 0)} 个，部分失败 {summary.get('partial_failed', 0)} 个。",
-                    "",
-                    "**关键证据**",
-                    f"- 累计解析房源数：{summary.get('total_found', 0)} 条。",
-                    f"- 最近日志数：{len(crawl.get('logs') or [])} 条。",
-                    "",
-                    "**可执行建议**",
-                    "优先查看 failed/partial_failed 任务的日志；如果只是补采，先创建小页数增量任务，确认解析正常后再扩大页数。",
-                ]
-            )
-
-        if model and not market:
-            return "\n".join(
-                [
-                    "**结论**",
-                    self._model_evidence_line(model).lstrip("- "),
-                    "",
-                    "**关键证据**",
-                    *self._model_metric_lines(model),
-                    "",
-                    "**可执行建议**",
-                    "如果 R² 较低，优先增强区县、户型、楼层、来源等特征，再考虑随机森林、GBDT 或 XGBoost。",
-                ]
-            )
-
-        if buyer_options:
-            return "\n".join(
-                [
-                    "**结论**",
-                    self._buyer_conclusion(buyer_options),
-                    "",
-                    "**关键证据**",
-                    self._buyer_evidence_lines(buyer_options, market),
-                    "",
-                    "**可执行建议**",
-                    self._buyer_suggestion(buyer_options),
-                ]
-            )
-
-        return "\n".join(
-            [
-                "**结论**",
-                self._market_conclusion(market),
-                "",
-                "**关键证据**",
-                self._market_evidence_line(market),
-                self._model_evidence_line(model) if model else "- 当前问题未触发模型工具。",
-                "",
-                "**可执行建议**",
-                self._suggestion(question, market, tool_calls),
-            ]
-        )
 
     @staticmethod
     def _market_conclusion(market: dict) -> str:
@@ -607,3 +556,9 @@ class AgentService:
                 "- 所有价格口径均为挂牌价/报价，不代表成交价。",
             ]
         )
+
+
+class AgentChatError(RuntimeError):
+    def __init__(self, message: str, data: dict | None = None) -> None:
+        super().__init__(message)
+        self.data = data or {}

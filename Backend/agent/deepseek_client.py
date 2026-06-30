@@ -17,14 +17,27 @@ SYSTEM_PROMPT = """你是“重庆二手房置业分析助手”。
 禁止编造具体数值。若工具没有返回数据，应说明数据不足，并建议先执行采集或分析任务。
 你可以扮演“预算约束下的重庆二手房置业顾问”，帮助用户比较区县、预算匹配、通勤便利代理和房源性价比，但仍然只能基于工具 JSON。
 禁止补充工具 JSON 之外的板块、平台、市场判断、交易经验或外部建议。
+不要额外举例任何工具 JSON 之外的预算、区间、排名或推算数值。
 如果工具里的通勤信息只是近地铁标签或代理分，必须明确说明这不等同于真实通勤时长。
 回答中的每一个数值必须能在工具 JSON 中直接找到；如需计算，必须明确写出计算依据。
 回答格式：结论 -> 关键证据 -> 可执行建议。
 所有涉及价格的数据都表述为“挂牌价/报价”，不得表述为“成交价”。
 """
+RETRY_PROMPT = """上一版回答未通过数值校验，请严格重写。
+要求：
+1. 只保留工具 JSON 中直接存在的数值；
+2. 不要补充预算示例、价格区间示例、排名或任何推算数字；
+3. 如果某个数字无法确保完全对应，就不要写该数字；
+4. 继续使用“结论 -> 关键证据 -> 可执行建议”结构；
+5. 所有价格口径都写成挂牌价/报价，不得写成交价。
+"""
 
 NUMBER_PATTERN = re.compile(r"(?<![\w])[-+]?\d[\d,]*(?:\.\d+)?%?")
 ALLOWED_TRANSACTION_PHRASES = ("不代表成交价", "并非成交价")
+
+
+class DeepSeekInvocationError(RuntimeError):
+    pass
 
 
 class DeepSeekClient:
@@ -34,50 +47,78 @@ class DeepSeekClient:
         return bool(settings.get("enabled")) and bool(settings.get("api_key"))
 
     @staticmethod
-    def generate_answer(question: str, evidence: dict[str, Any], fallback_answer: str) -> tuple[str, str]:
+    def generate_answer(question: str, evidence: dict[str, Any]) -> tuple[str, str]:
         if not DeepSeekClient.is_enabled():
-            return fallback_answer, "deepseek-disabled-fallback"
+            raise DeepSeekInvocationError("DeepSeek 未启用或 API Key 未配置")
 
         settings = SettingsService.deepseek_settings()
+        model = str(settings.get("model") or current_app.config["DEEPSEEK_MODEL"])
+        messages = DeepSeekClient._build_messages(question, evidence)
+        try:
+            content = DeepSeekClient._request_completion(
+                settings=settings,
+                model=model,
+                messages=messages,
+            )
+            if not DeepSeekClient._is_grounded_answer(content, evidence):
+                content = DeepSeekClient._request_completion(
+                    settings=settings,
+                    model=model,
+                    messages=[
+                        *messages,
+                        {"role": "assistant", "content": content},
+                        {"role": "user", "content": RETRY_PROMPT},
+                    ],
+                )
+            if not DeepSeekClient._is_grounded_answer(content, evidence):
+                raise DeepSeekInvocationError("DeepSeek 返回内容未通过证据校验")
+            return content, model
+        except Exception as exc:
+            if isinstance(exc, DeepSeekInvocationError):
+                raise
+            raise DeepSeekInvocationError(f"DeepSeek 调用失败：{exc}") from exc
+
+    @staticmethod
+    def _build_messages(question: str, evidence: dict[str, Any]) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "用户问题：\n"
+                    f"{question}\n\n"
+                    "以下是后端白名单工具返回的 JSON 证据。请只基于这些证据回答：\n"
+                    f"{json.dumps(evidence, ensure_ascii=False, default=str)}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _request_completion(settings: dict[str, Any], model: str, messages: list[dict[str, str]]) -> str:
         payload = {
-            "model": settings.get("model") or current_app.config["DEEPSEEK_MODEL"],
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        "用户问题：\n"
-                        f"{question}\n\n"
-                        "以下是后端白名单工具返回的 JSON 证据。请只基于这些证据回答：\n"
-                        f"{json.dumps(evidence, ensure_ascii=False, default=str)}"
-                    ),
-                },
-            ],
+            "model": model,
+            "messages": messages,
             "stream": False,
-            "temperature": 0.2,
+            "temperature": 0,
         }
         url = str(settings.get("base_url") or current_app.config["DEEPSEEK_BASE_URL"]).rstrip("/") + "/chat/completions"
         headers = {
             "Authorization": f"Bearer {settings.get('api_key') or current_app.config['DEEPSEEK_API_KEY']}",
             "Content-Type": "application/json",
         }
-        try:
-            response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=int(settings.get("timeout") or current_app.config["DEEPSEEK_TIMEOUT"]),
-            )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            if not content:
-                return fallback_answer, "deepseek-empty-fallback"
-            if not DeepSeekClient._is_grounded_answer(content, evidence):
-                return fallback_answer, f"{settings.get('model') or current_app.config['DEEPSEEK_MODEL']}+grounding-guard"
-            return content, str(settings.get("model") or current_app.config["DEEPSEEK_MODEL"])
-        except Exception as exc:
-            return fallback_answer + f"\n\n> DeepSeek 调用失败，已使用本地工具证据回答：{exc}", "deepseek-error-fallback"
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=int(settings.get("timeout") or current_app.config["DEEPSEEK_TIMEOUT"]),
+        )
+        response.raise_for_status()
+        data = response.json()
+        message = data["choices"][0]["message"]
+        content = str(message.get("content") or "").strip()
+        if not content:
+            raise DeepSeekInvocationError("DeepSeek 返回空内容")
+        return content
 
     @staticmethod
     def _is_grounded_answer(answer: str, evidence: dict[str, Any]) -> bool:

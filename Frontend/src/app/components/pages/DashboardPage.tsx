@@ -31,6 +31,7 @@ import {
   LayoutDistributionItem,
   PriceDistributionItem,
   PriceTrendItem,
+  type SystemSettings,
 } from "../../services/api";
 
 type DashboardDistrict = District & { rawDistricts?: string[] };
@@ -94,6 +95,7 @@ export function DashboardPage() {
   const [scatterData, setScatterData] = useState<AreaPricePoint[]>([]);
   const [layoutData, setLayoutData] = useState<LayoutDistributionItem[]>([]);
   const [priceDistribution, setPriceDistribution] = useState<PriceDistributionItem[]>([]);
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,20 +109,23 @@ export function DashboardPage() {
       api.getAreaPriceScatter(500),
       api.getLayoutDistribution(8),
       api.getPriceDistributionChart(),
+      api.getSettings(),
     ])
-      .then(([overviewData, districtData, districtMap, trend, scatter, layout, distribution]) => {
+      .then(([overviewData, districtData, districtMap, trend, scatter, layout, distribution, settingsData]) => {
         const districts = mapDistricts(districtMap.items);
+        const visibleDistricts = new Set(districts.map(item => item.name));
         setOverview(overviewData);
-        setDistrictPrice(districtData.items);
+        setDistrictPrice(districtData.items.filter(item => visibleDistricts.has(item.district)));
         setMapData(districts);
         setTrendData(trend.items);
         setScatterData(scatter.items);
         setLayoutData(layout.items);
         setPriceDistribution(distribution.items);
+        setSettings(settingsData);
         setError(null);
         setSelectedDistrict(prev => {
-          if (districts.length === 0) return null;
-          return districts.find(item => item.name === prev?.name) ?? districts[0];
+          if (!prev) return null;
+          return districts.find(item => item.name === prev.name) ?? null;
         });
       })
       .catch(err => {
@@ -131,6 +136,7 @@ export function DashboardPage() {
         setScatterData([]);
         setLayoutData([]);
         setPriceDistribution([]);
+        setSettings(null);
         setSelectedDistrict(null);
         setError(err instanceof Error ? err.message : "Dashboard 数据加载失败");
       })
@@ -142,8 +148,7 @@ export function DashboardPage() {
   }, []);
 
   const kpis = overview?.kpis;
-  const topDistrict = overview?.top_district;
-  const latestDate = kpis?.latest_updated_at?.slice(0, 10) ?? "暂无更新时间";
+  const latestDate = kpis?.latest_updated_at ?? "暂无";
 
   const kpiData = useMemo(
     () => [
@@ -220,26 +225,24 @@ export function DashboardPage() {
   };
 
   const crawlItems = overview?.crawl_status.items ?? [];
-  const failedTaskCount = overview
-    ? overview.crawl_status.summary.failed + overview.crawl_status.summary.partial_failed
-    : 0;
+  const sourceSummary = overview?.source_summary ?? [];
+  const scheduler = settings?.scheduler;
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, color: "#163A70" }}>
             首页总览
           </h2>
           <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 4 }}>
-            最新数据时间：{latestDate} · 重庆二手房挂牌价数据概览
+            更新时间：{latestDate}
           </p>
         </div>
         <div className="flex items-center gap-3">
           <StatusTag 
             status={loading ? "running" : error ? "danger" : "success"} 
-            label={loading ? "加载中" : error ? "接口异常" : "后端数据"} 
+            label={loading ? "加载中" : error ? "异常" : "已连接"} 
           />
           <Button 
             variant="outline" 
@@ -264,22 +267,20 @@ export function DashboardPage() {
             fontSize: 13 
           }}
         >
-          Dashboard 后端数据加载失败：{error}。请确认后端服务、鉴权 token 和数据库连接正常后重试。
+          首页数据加载失败：{error}
         </div>
       )}
 
-      {/* KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         {kpiData.map(kpi => (
           <KpiCard key={kpi.title} {...kpi} />
         ))}
       </div>
 
-      {/* Map & District Rank */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <SectionCard
-          title="重庆区县数据分布图"
-          subtitle="行政区边界 · 支持均价、样本量、质量分切换"
+          title="重庆区县分布"
+          className="lg:col-span-2"
           action={
             <div 
               className="flex rounded-lg p-1"
@@ -302,15 +303,16 @@ export function DashboardPage() {
             </div>
           }
         >
-          <ChongqingHeatMap
-            metric={mapMetric}
-            data={mapData}
-            selectedDistrict={selectedDistrict?.name}
-            onSelectDistrict={district => setSelectedDistrict(district as DashboardDistrict | null)}
-          />
-          <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
-            {[
-              ["当前区县", selectedDistrict?.name ?? "全市"],
+            <ChongqingHeatMap
+              metric={mapMetric}
+              data={mapData}
+              height={340}
+              selectedDistrict={selectedDistrict?.name}
+              onSelectDistrict={district => setSelectedDistrict(district as DashboardDistrict | null)}
+            />
+            <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
+              {[
+              ["选中区县", selectedDistrict?.name ?? "未选中"],
               ["挂牌均价", selectedDistrict ? `${fmt(selectedDistrict.avgPrice)} 元/㎡` : `${fmt(kpis?.avg_unit_price)} 元/㎡`],
               ["采集样本", selectedDistrict ? `${fmt(selectedDistrict.count)} 套` : `${fmt(kpis?.total_count)} 套`],
               ["质量分", selectedDistrict ? `${fmt(selectedDistrict.quality, 1)} 分` : `${fmt(kpis?.avg_quality, 1)} 分`],
@@ -358,139 +360,118 @@ export function DashboardPage() {
               style={{ fontSize: 12, height: 32, color: "#6B7280" }} 
               onClick={() => setSelectedDistrict(null)}
             >
-              查看全市
+              重置
             </Button>
           </div>
         </SectionCard>
 
-        <SectionCard title="区县均价排行" subtitle="Top 8 区县挂牌单价对比">
+        <SectionCard title="区县均价">
           <DistrictRankBar data={districtPrice} />
         </SectionCard>
       </div>
 
-      {/* Trend & Distribution */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2">
-          <SectionCard title="挂牌价快照趋势" subtitle="按 listing_snapshots 聚合的月度挂牌均价">
+          <SectionCard title="挂牌价趋势">
             <PriceTrendLine data={trendData} />
           </SectionCard>
         </div>
-        <SectionCard title="总价分布" subtitle="按挂牌总价区间统计样本量">
+        <SectionCard title="总价分布">
           <PriceDistributionBar data={priceDistribution} />
         </SectionCard>
       </div>
 
-      {/* Scatter & Sidebar */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2">
-          <SectionCard title="面积-单价散点图" subtitle="真实房源面积与挂牌单价分布">
+          <SectionCard title="面积-单价">
             <AreaPriceScatter data={scatterData} />
           </SectionCard>
         </div>
-        <div className="flex flex-col gap-5">
-          <SectionCard title="户型分布" subtitle="在售房源户型占比">
-            <LayoutDonut data={layoutData} />
-          </SectionCard>
+        <SectionCard title="户型分布">
+          <LayoutDonut data={layoutData} />
+        </SectionCard>
+      </div>
 
-          <SectionCard title="采集状态" subtitle="最近任务进度">
-            <div className="flex flex-col gap-3">
-              {crawlItems.length === 0 && (
-                <div style={{ color: "#6B7280", fontSize: 12, lineHeight: 1.7 }}>
-                  暂无后端采集任务。可进入"采集任务管理"新建小规模试采集任务。
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <SectionCard title="采集任务">
+          <div className="flex flex-col gap-2.5">
+            {crawlItems.length === 0 && (
+              <div style={{ color: "#9CA3AF", fontSize: 12 }}>暂无任务</div>
+            )}
+            {crawlItems.map(task => (
+              <div
+                key={task.id}
+                className="rounded-lg px-3 py-2"
+                style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{task.name}</span>
+                  <StatusTag status={task.status} label={statusLabel(task.status)} />
                 </div>
-              )}
-              {crawlItems.map(task => (
-                <div key={task.id} className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span style={{ fontSize: 13, color: "#1F2937" }}>{sourceLabel(task.source)}</span>
-                    <StatusTag status={task.status} label={statusLabel(task.status)} />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 rounded-full" style={{ background: "#E5EAF2" }}>
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${task.progress}%`,
-                          background: task.status === "running" ? "#163A70" : task.status === "success" ? "#16A34A" : "#DC2626",
-                        }}
-                      />
-                    </div>
-                    <span style={{ fontSize: 11, color: "#6B7280", minWidth: 30 }}>{task.progress}%</span>
-                  </div>
-                  <span style={{ fontSize: 11, color: "#6B7280" }}>解析 {fmt(task.total_found)} 条 · 失败页 {task.failed_pages}</span>
+                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>
+                  {sourceLabel(task.source)} · 解析 {fmt(task.total_found)} 条 · 失败页 {task.failed_pages} · {task.progress}%
                 </div>
-              ))}
-            </div>
-          </SectionCard>
+              </div>
+            ))}
+            <Button
+              size="sm"
+              variant="outline"
+              style={{ fontSize: 12, borderColor: "#E5EAF2" }}
+              onClick={() => navigate("/crawl")}
+            >
+              查看任务页
+            </Button>
+          </div>
+        </SectionCard>
 
-          <SectionCard title="系统洞察" subtitle="基于当前后端聚合结果">
-            <div className="flex flex-col gap-3">
-              <div 
-                className="p-3 rounded-lg"
-                style={{ 
-                  background: "#F8FAFC", 
-                  border: "1px solid #E5EAF2"
-                }}
+        <SectionCard title="数据来源">
+          <div className="flex flex-col gap-2.5">
+            {sourceSummary.map(item => (
+              <div
+                key={item.source}
+                className="rounded-lg px-3 py-2"
+                style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
               >
-                <p style={{ fontSize: 12, color: "#1F2937", lineHeight: 1.6 }}>
-                  {topDistrict ? (
-                    <>
-                      <strong>{topDistrict.district}</strong>挂牌均价 {fmt(topDistrict.avg_unit_price)} 元/㎡，当前样本量 {fmt(topDistrict.listing_count)} 套。
-                    </>
-                  ) : (
-                    "暂无真实区县聚合结果，可先导入旧库或执行采集任务。"
-                  )}
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <span style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{sourceLabel(item.source)}</span>
+                  <span style={{ fontSize: 12, color: "#163A70" }}>{fmt(item.listing_count)} 条</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>
+                  均价 {fmt(item.avg_unit_price)} 元/㎡ · 质量 {fmt(item.avg_quality, 1)} 分
+                </div>
               </div>
-              <div 
-                className="p-3 rounded-lg"
-                style={{ 
-                  background: failedTaskCount > 0 ? "#FFFBEB" : "#F0FDF4", 
-                  border: `1px solid ${failedTaskCount > 0 ? "#FCD34D" : "#BBF7D0"}`
-                }}
+            ))}
+          </div>
+        </SectionCard>
+
+        <SectionCard title="定时任务">
+          <div className="flex flex-col gap-2.5">
+            {[
+              ["全局调度", scheduler?.enabled, scheduler?.timezone ?? "-"],
+              ["定时采集", scheduler?.incremental_crawl_job_enabled, `${scheduler?.incremental_crawl_interval_hours ?? "-"} 小时`],
+              ["定时质检", scheduler?.quality_report_job_enabled, `${scheduler?.quality_report_interval_hours ?? "-"} 小时`],
+            ].map(([label, enabled, extra]) => (
+              <div
+                key={String(label)}
+                className="rounded-lg px-3 py-2 flex items-center justify-between gap-3"
+                style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
               >
-                <p style={{ fontSize: 12, color: failedTaskCount > 0 ? "#F59E0B" : "#16A34A", lineHeight: 1.6 }}>
-                  {failedTaskCount > 0
-                    ? `存在 ${failedTaskCount} 个失败或部分失败采集任务，建议进入日志页查看失败 URL 与错误类型。`
-                    : "当前没有失败采集任务记录，可继续按区县做增量补采。"}
-                </p>
+                <div>
+                  <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{label}</div>
+                  <div style={{ fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>{extra}</div>
+                </div>
+                <StatusTag status={enabled ? "success" : "pending"} label={enabled ? "开启" : "关闭"} />
               </div>
-              <div 
-                className="p-3 rounded-lg"
-                style={{ 
-                  background: "#EFF6FF", 
-                  border: "1px solid #BFDBFE" 
-                }}
-              >
-                <p style={{ fontSize: 12, color: "#1F4E8C", lineHeight: 1.6 }}>
-                  已可用于分析的样本 {fmt(kpis?.analysis_ready_count ?? 0)} 条。模型指标、聚类画像和异常检测结果可在"分析建模"模块查看。
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  style={{ fontSize: 12, borderColor: "#E5EAF2" }} 
-                  onClick={() => navigate("/agent")}
-                >
-                  生成报告
-                </Button>
-                <Button 
-                  size="sm" 
-                  style={{ 
-                    background: "#163A70", 
-                    border: "1px solid #163A70",
-                    fontSize: 12,
-                    color: "#fff"
-                  }} 
-                  onClick={() => navigate("/analysis")}
-                >
-                  查看模型
-                </Button>
-              </div>
-            </div>
-          </SectionCard>
-        </div>
+            ))}
+            <Button
+              size="sm"
+              style={{ background: "#163A70", border: "1px solid #163A70", fontSize: 12, color: "#fff" }}
+              onClick={() => navigate("/settings")}
+            >
+              查看设置
+            </Button>
+          </div>
+        </SectionCard>
       </div>
     </div>
   );

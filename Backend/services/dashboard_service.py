@@ -12,6 +12,46 @@ from Backend.models.snapshot import ListingSnapshot
 
 
 VALID_STATUSES = ("active", "valid")
+OFFICIAL_DISTRICT_NAMES = {
+    "万州区",
+    "涪陵区",
+    "渝中区",
+    "大渡口区",
+    "江北区",
+    "沙坪坝区",
+    "九龙坡区",
+    "南岸区",
+    "北碚区",
+    "綦江区",
+    "大足区",
+    "渝北区",
+    "巴南区",
+    "黔江区",
+    "长寿区",
+    "江津区",
+    "合川区",
+    "永川区",
+    "南川区",
+    "璧山区",
+    "铜梁区",
+    "潼南区",
+    "荣昌区",
+    "开州区",
+    "梁平区",
+    "武隆区",
+    "城口县",
+    "丰都县",
+    "垫江县",
+    "忠县",
+    "云阳县",
+    "奉节县",
+    "巫山县",
+    "巫溪县",
+    "石柱土家族自治县",
+    "秀山土家族苗族自治县",
+    "酉阳土家族苗族自治县",
+    "彭水苗族土家族自治县",
+}
 
 DISTRICT_ALIASES = {
     "渝中": "渝中区",
@@ -40,6 +80,17 @@ DISTRICT_ALIASES = {
     "开州": "开州区",
     "黔江": "黔江区",
     "武隆": "武隆区",
+    "城口": "城口县",
+    "丰都": "丰都县",
+    "垫江": "垫江县",
+    "云阳": "云阳县",
+    "奉节": "奉节县",
+    "巫山": "巫山县",
+    "巫溪": "巫溪县",
+    "石柱": "石柱土家族自治县",
+    "秀山": "秀山土家族苗族自治县",
+    "酉阳": "酉阳土家族苗族自治县",
+    "彭水": "彭水苗族土家族自治县",
     "两江": "两江新区",
 }
 
@@ -65,6 +116,10 @@ def normalize_district_name(name: str | None) -> str:
     if text.endswith(("区", "县", "自治县", "新区")):
         return text
     return text
+
+
+def is_official_district_name(name: str | None) -> bool:
+    return normalize_district_name(name) in OFFICIAL_DISTRICT_NAMES
 
 
 def _valid_listing_condition():
@@ -99,18 +154,23 @@ class DashboardService:
         latest_updated_at = db.session.query(db.func.max(Listing.updated_at)).scalar()
         seven_days_ago = datetime.utcnow() - timedelta(days=7)
 
+        district_map = DashboardService.district_map()
+        top_districts = sorted(
+            district_map["items"],
+            key=lambda item: (item["avg_unit_price"], item["listing_count"]),
+            reverse=True,
+        )
+
         row = db.session.query(
             db.func.coalesce(db.func.avg(Listing.unit_price), 0).label("avg_unit_price"),
             db.func.coalesce(db.func.avg(Listing.total_price), 0).label("avg_total_price"),
             db.func.coalesce(db.func.avg(Listing.data_quality_score), 0).label("avg_quality"),
-            db.func.count(db.func.distinct(Listing.district)).label("district_count"),
             db.func.sum(case((_analysis_ready_condition(), 1), else_=0)).label("analysis_ready_count"),
             db.func.sum(case((Listing.last_seen_at >= seven_days_ago, 1), else_=0)).label("recent_seen_count"),
         ).one()
 
         complete_count = _safe_int(db.session.query(db.func.count(Listing.id)).filter(_valid_listing_condition()).scalar())
         snapshot_count = _safe_int(db.session.query(db.func.count(ListingSnapshot.id)).scalar())
-        top_districts = DashboardService.district_price(limit=1)["items"]
 
         return {
             "kpis": {
@@ -120,7 +180,7 @@ class DashboardService:
                 "avg_total_price": _round(row.avg_total_price, 2) or 0,
                 "avg_quality": _round(row.avg_quality, 2) or 0,
                 "data_complete_rate": round((complete_count / total_count * 100), 2) if total_count else 0,
-                "district_count": _safe_int(row.district_count),
+                "district_count": district_map["district_count"],
                 "analysis_ready_count": _safe_int(row.analysis_ready_count),
                 "recent_seen_count": _safe_int(row.recent_seen_count),
                 "snapshot_count": snapshot_count,
@@ -342,7 +402,7 @@ class DashboardService:
                 "rank": item.get("rank"),
             }
             for item in chart_items
-            if item["district"] != "待复核"
+            if item["district"] != "待复核" and is_official_district_name(item["district"])
         ]
         total_count = sum(item["count"] for item in items)
         latest_updated_at = db.session.query(db.func.max(Listing.updated_at)).scalar()
@@ -392,7 +452,7 @@ class DashboardService:
     @staticmethod
     def price_trend(months: int = 12) -> dict:
         months = min(36, max(1, int(months or 12)))
-        rows = (
+        month_rows = (
             db.session.query(
                 db.func.date_format(ListingSnapshot.snapshot_at, "%Y-%m").label("month"),
                 db.func.coalesce(db.func.avg(ListingSnapshot.unit_price), 0).label("avg_unit_price"),
@@ -405,6 +465,46 @@ class DashboardService:
             .limit(months)
             .all()
         )
+
+        rows = month_rows
+        date_format = "%Y-%m"
+        if len(month_rows) <= 1:
+            day_limit = min(45, max(7, months * 3))
+            day_rows = (
+                db.session.query(
+                    db.func.date_format(ListingSnapshot.snapshot_at, "%Y-%m-%d").label("month"),
+                    db.func.coalesce(db.func.avg(ListingSnapshot.unit_price), 0).label("avg_unit_price"),
+                    db.func.coalesce(db.func.avg(ListingSnapshot.total_price), 0).label("avg_total_price"),
+                    db.func.count(ListingSnapshot.id).label("snapshot_count"),
+                )
+                .filter(ListingSnapshot.unit_price.isnot(None), ListingSnapshot.unit_price > 0)
+                .group_by(db.func.date_format(ListingSnapshot.snapshot_at, "%Y-%m-%d"))
+                .order_by(db.func.date_format(ListingSnapshot.snapshot_at, "%Y-%m-%d").desc())
+                .limit(day_limit)
+                .all()
+            )
+            if len(day_rows) > 1:
+                rows = day_rows
+                date_format = "%Y-%m-%d"
+
+        if date_format == "%Y-%m-%d" and len(rows) <= 2:
+            hour_limit = min(96, max(12, months * 8))
+            hour_rows = (
+                db.session.query(
+                    db.func.date_format(ListingSnapshot.snapshot_at, "%Y-%m-%d %H:00").label("month"),
+                    db.func.coalesce(db.func.avg(ListingSnapshot.unit_price), 0).label("avg_unit_price"),
+                    db.func.coalesce(db.func.avg(ListingSnapshot.total_price), 0).label("avg_total_price"),
+                    db.func.count(ListingSnapshot.id).label("snapshot_count"),
+                )
+                .filter(ListingSnapshot.unit_price.isnot(None), ListingSnapshot.unit_price > 0)
+                .group_by(db.func.date_format(ListingSnapshot.snapshot_at, "%Y-%m-%d %H:00"))
+                .order_by(db.func.date_format(ListingSnapshot.snapshot_at, "%Y-%m-%d %H:00").desc())
+                .limit(hour_limit)
+                .all()
+            )
+            if len(hour_rows) > len(rows):
+                rows = hour_rows
+                date_format = "%Y-%m-%d %H:00"
 
         if not rows:
             rows = (
@@ -420,6 +520,7 @@ class DashboardService:
                 .limit(months)
                 .all()
             )
+            date_format = "%Y-%m"
 
         items = [
             {
@@ -427,6 +528,11 @@ class DashboardService:
                 "avg_unit_price": _round(row.avg_unit_price, 2) or 0,
                 "avg_total_price": _round(row.avg_total_price, 2) or 0,
                 "listing_count": _safe_int(row.snapshot_count),
+                "granularity": (
+                    "hour"
+                    if date_format == "%Y-%m-%d %H:00"
+                    else "day" if date_format == "%Y-%m-%d" else "month"
+                ),
             }
             for row in reversed(rows)
         ]

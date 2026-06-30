@@ -62,7 +62,7 @@ class BaseConfig:
     INCREMENTAL_CRAWL_MAX_PAGES = int(os.getenv("INCREMENTAL_CRAWL_MAX_PAGES", "1"))
     INCREMENTAL_CRAWL_MAX_WORKERS = int(os.getenv("INCREMENTAL_CRAWL_MAX_WORKERS", "3"))
 
-    AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
+    AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").lower() in {"1", "true", "yes", "on"}
     AUTH_ADMIN_USERNAME = os.getenv("AUTH_ADMIN_USERNAME", "admin")
     AUTH_ADMIN_PASSWORD = os.getenv("AUTH_ADMIN_PASSWORD", "swu@2026")
     AUTH_TOKEN_EXPIRES_SECONDS = int(os.getenv("AUTH_TOKEN_EXPIRES_SECONDS", "28800"))

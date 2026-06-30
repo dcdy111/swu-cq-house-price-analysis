@@ -1,22 +1,16 @@
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, Cell } from "recharts";
 import { PriceDistributionItem } from "../../services/api";
 
-const FALLBACK_DATA: PriceDistributionItem[] = [
-  { label: "50万以下", count: 4210, ratio: 7.2 },
-  { label: "50-100万", count: 13860, ratio: 23.8 },
-  { label: "100-150万", count: 17420, ratio: 29.9 },
-  { label: "150-200万", count: 10480, ratio: 18.0 },
-  { label: "200-300万", count: 7610, ratio: 13.1 },
-  { label: "300-500万", count: 3220, ratio: 5.5 },
-  { label: "500万以上", count: 1460, ratio: 2.5 },
-];
-
 interface PriceDistributionBarProps {
   data?: PriceDistributionItem[];
 }
 
 export function PriceDistributionBar({ data: apiData }: PriceDistributionBarProps) {
-  const data = apiData && apiData.length > 0 ? apiData : FALLBACK_DATA;
+  const data = apiData && apiData.length > 0 ? apiData : [];
+
+  if (data.length === 0) {
+    return <div className="h-[200px] flex items-center justify-center" style={{ fontSize: 12, color: "#9CA3AF" }}>暂无数据</div>;
+  }
 
   return (
     <ResponsiveContainer width="100%" height={200}>

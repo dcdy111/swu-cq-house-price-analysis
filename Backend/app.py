@@ -60,7 +60,7 @@ def register_auth_guard(app: Flask) -> None:
             return None
         if request.path == "/api/health" or request.path == "/api/auth/login":
             return None
-        if app.config.get("TESTING") or not app.config.get("AUTH_REQUIRED", True):
+        if app.config.get("TESTING") or not app.config.get("AUTH_REQUIRED", False):
             return None
 
         auth_header = request.headers.get("Authorization", "")

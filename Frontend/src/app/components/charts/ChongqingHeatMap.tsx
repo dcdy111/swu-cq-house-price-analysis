@@ -86,45 +86,60 @@ function shortDistrictName(name: string) {
   return DISTRICT_SHORT_LABELS[name] ?? name.replace(/土家族苗族自治县|苗族土家族自治县|土家族自治县/g, "").replace(/[区县]$/, "");
 }
 
-function buildTooltip(params: any, metric: ChongqingMapMetric, meta: typeof METRIC_META.avgPrice) {
-  const data = params.data;
-  if (!data || (typeof data.value !== "number" && !Array.isArray(data.value))) {
-    return `<div style="padding:4px 0;font-size:13px;color:#374151;">
-      <strong>${params.name}</strong><br/>
-      <span style="color:#9CA3AF;">暂无采集样本</span>
+function buildTooltip(params: any, metric: ChongqingMapMetric, meta: typeof METRIC_META.avgPrice, districtByName: Map<string, District>) {
+  const districtName = params.name;
+  const district = districtByName.get(districtName);
+  const isMainCity = MAIN_CITY_DISTRICTS.has(districtName);
+
+  if (!district) {
+    return `<div style="min-width:180px;padding:4px 0;font-size:13px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;border-bottom:1px solid #F3F4F6;padding-bottom:6px;">
+        <strong style="font-size:14px;color:#111827;">${districtName}</strong>
+        ${isMainCity ? '<span style="font-size:10px;background:#EFF6FF;color:#1D4ED8;padding:1px 6px;border-radius:999px;">主城</span>' : '<span style="font-size:10px;background:#F3F4F6;color:#6B7280;padding:1px 6px;border-radius:999px;">区县</span>'}
+      </div>
+      <div style="font-size:12px;color:#9CA3AF;text-align:center;padding:12px 0;">
+        暂无该区县采集数据<br/>
+        <span style="font-size:11px;">可进入采集任务进行补采</span>
+      </div>
     </div>`;
   }
-  const districtValue = Array.isArray(data.value) ? Number(data.value[2]) : Number(data.value);
-  const changeIcon = data.change > 0 ? "↑" : data.change < 0 ? "↓" : "—";
-  const changeColor = data.change > 0 ? "#DC2626" : data.change < 0 ? "#16A34A" : "#6B7280";
-  const isMainCity = MAIN_CITY_DISTRICTS.has(params.name);
 
-  return `<div style="min-width:180px;">
+  const districtValue = metricValue(district, metric);
+  const changeIcon = district.change > 0 ? "↑" : district.change < 0 ? "↓" : "—";
+  const changeColor = district.change > 0 ? "#DC2626" : district.change < 0 ? "#16A34A" : "#6B7280";
+  const changeText = district.change === 0 ? "暂无变化" : `${changeIcon} ${Math.abs(district.change).toFixed(2)}%`;
+
+  const metricColor = metric === "avgPrice" ? "#DC2626" : metric === "count" ? "#2563EB" : "#16A34A";
+
+  return `<div style="min-width:200px;">
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;border-bottom:1px solid #F3F4F6;padding-bottom:6px;">
-      <strong style="font-size:14px;color:#111827;">${params.name}</strong>
-      ${isMainCity ? '<span style="font-size:10px;background:#EFF6FF;color:#1D4ED8;padding:1px 6px;border-radius:999px;">主城</span>' : ""}
+      <strong style="font-size:15px;color:#111827;">${districtName}</strong>
+      ${isMainCity ? '<span style="font-size:10px;background:#EFF6FF;color:#1D4ED8;padding:1px 6px;border-radius:999px;">主城九区</span>' : ""}
     </div>
-    <div style="font-size:12px;color:#374151;line-height:1.9;">
-      <div style="display:flex;justify-content:space-between;">
-        <span style="color:#6B7280;">${meta.label}</span>
-        <strong style="color:#111827;">${formatMetric(districtValue, metric)} ${meta.unit}</strong>
+    <div style="font-size:12px;color:#374151;line-height:2;">
+      <div style="display:flex;justify-content:space-between;align-items:center;background:#F8FAFC;padding:6px 8px;border-radius:6px;margin-bottom:4px;">
+        <span style="color:#4B5563;font-weight:500;">${meta.label}</span>
+        <strong style="color:${metricColor};font-size:14px;">${formatMetric(districtValue, metric)} ${meta.unit}</strong>
       </div>
       <div style="display:flex;justify-content:space-between;">
         <span style="color:#6B7280;">挂牌均价</span>
-        <span style="color:#374151;">${data.avgPrice?.toLocaleString() ?? "—"} 元/㎡</span>
+        <span style="color:#1F2937;font-weight:500;">${district.avgPrice?.toLocaleString() ?? "—"} 元/㎡</span>
       </div>
       <div style="display:flex;justify-content:space-between;">
-        <span style="color:#6B7280;">样本量</span>
-        <span style="color:#374151;">${data.count?.toLocaleString() ?? 0} 套</span>
+        <span style="color:#6B7280;">采集样本</span>
+        <span style="color:#1F2937;font-weight:500;">${district.count?.toLocaleString() ?? 0} 套</span>
       </div>
       <div style="display:flex;justify-content:space-between;">
         <span style="color:#6B7280;">环比变化</span>
-        <span style="color:${changeColor};font-weight:600;">${changeIcon} ${Math.abs(data.change ?? 0).toFixed(2)}%</span>
+        <span style="color:${changeColor};font-weight:600;">${changeText}</span>
       </div>
       <div style="display:flex;justify-content:space-between;">
         <span style="color:#6B7280;">质量评分</span>
-        <span style="color:#374151;">${(data.quality ?? 0).toFixed(1)} 分</span>
+        <span style="color:#1F2937;">${(district.quality ?? 0).toFixed(1)} 分</span>
       </div>
+    </div>
+    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #E5E7EB;font-size:10px;color:#9CA3AF;text-align:center;">
+      点击区县查看详细数据
     </div>
   </div>`;
 }
@@ -253,17 +268,18 @@ export function ChongqingHeatMap({
         padding: [10, 14],
         textStyle: { color: "#374151", fontSize: 12 },
         extraCssText: "border-radius:10px; box-shadow: 0 4px 24px rgba(0,0,0,0.10);",
-        formatter: params => buildTooltip(params, metric, meta),
+        formatter: params => buildTooltip(params, metric, METRIC_META[metric], districtByName),
       },
       geo: {
         map: "chongqing",
         roam: true,
         zoom: 1.1,
+        scaleLimit: { min: 1, max: 8 },
         top: 16,
         bottom: 48,
         left: 8,
         right: 8,
-        silent: true,
+        silent: false,
         itemStyle: {
           areaColor: "#F1F5F9",
           borderColor: "#CBD5E1",
@@ -295,6 +311,8 @@ export function ChongqingHeatMap({
           map: "chongqing",
           geoIndex: 0,
           selectedMode: "single",
+          roam: true,
+          scaleLimit: { min: 1, max: 8 },
           zoom: 1.1,
           top: 16,
           bottom: 48,
@@ -306,18 +324,18 @@ export function ChongqingHeatMap({
               show: true,
               color: "#1E3A8A",
               fontWeight: 700,
-              fontSize: 12,
-              backgroundColor: "rgba(255,255,255,0.92)",
+              fontSize: 13,
+              backgroundColor: "rgba(255,255,255,0.95)",
               borderRadius: 8,
               padding: [4, 10],
               formatter: p => shortDistrictName(p.name),
             },
             itemStyle: {
               areaColor: "#FCD34D",
-              borderColor: "#ffffff",
-              borderWidth: 2,
-              shadowBlur: 8,
-              shadowColor: "rgba(251,191,36,0.35)",
+              borderColor: "#F59E0B",
+              borderWidth: 2.5,
+              shadowBlur: 12,
+              shadowColor: "rgba(245,158,11,0.45)",
             },
           },
           select: {
@@ -342,7 +360,7 @@ export function ChongqingHeatMap({
             borderWidth: 1.2,
             areaColor: "#EFF6FF",
             shadowBlur: 4,
-            shadowColor: "rgba(30,64,175,0.06)",
+            shadowColor: "rgba(30,64,175,0.08)",
           },
           data: chartData,
         },
@@ -431,21 +449,20 @@ export function ChongqingHeatMap({
             }}
           />
           <span style={{ color: "#6B7280", fontSize: 13, marginTop: 10 }}>
-            正在加载高德行政区边界...
+            正在加载地图...
           </span>
         </div>
       )}
       <div ref={containerRef} style={{ width: "100%", height, borderRadius: 12, overflow: "hidden" }} />
+
       <div
         className="flex items-center justify-between"
         style={{ fontSize: 11, color: "#9CA3AF", paddingTop: 6, paddingLeft: 2 }}
       >
         <div className="flex items-center gap-3">
-          <span>区划底图：高德行政区边界 GeoJSON</span>
-          <span style={{ color: "#CBD5E1" }}>|</span>
           <span>{meta.desc}</span>
         </div>
-        <span style={{ color: "#6B7280" }}>{meta.label}</span>
+        <span style={{ color: "#6B7280" }}>滚轮缩放 · 拖动平移</span>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

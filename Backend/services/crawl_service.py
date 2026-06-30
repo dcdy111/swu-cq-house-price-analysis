@@ -17,11 +17,7 @@ from Backend.services.settings_service import SettingsService
 
 class CrawlService:
     @staticmethod
-    def sources() -> list[dict]:
-        return list_sources()
-
-    @staticmethod
-    def create_task(payload: dict) -> CrawlTask:
+    def _resolve_task_payload(payload: dict) -> dict:
         source = str(payload.get("source") or "fang").strip()
         crawler = get_crawler(source)
         if crawler is None:
@@ -45,10 +41,32 @@ class CrawlService:
         if invalid:
             raise ValueError(f"{crawler.source_name} 未配置这些区县: {', '.join(invalid)}")
 
+        return {
+            "source": source,
+            "crawler": crawler,
+            "name": str(payload.get("name") or f"{crawler.source_name}采集任务").strip() or f"{crawler.source_name}采集任务",
+            "mode": str(payload.get("mode") or "manual").strip() or "manual",
+            "districts": districts,
+            "max_pages": max_pages,
+            "max_workers": max_workers,
+        }
+
+    @staticmethod
+    def sources() -> list[dict]:
+        return list_sources()
+
+    @staticmethod
+    def create_task(payload: dict) -> CrawlTask:
+        resolved = CrawlService._resolve_task_payload(payload)
+        crawler = resolved["crawler"]
+        districts = resolved["districts"]
+        max_pages = resolved["max_pages"]
+        max_workers = resolved["max_workers"]
+
         task = CrawlTask(
-            name=payload.get("name") or f"{crawler.source_name}采集任务",
-            source=source,
-            mode=payload.get("mode") or "manual",
+            name=resolved["name"],
+            source=resolved["source"],
+            mode=resolved["mode"],
             max_pages=max_pages,
             max_workers=max_workers,
             status="pending",
@@ -74,6 +92,63 @@ class CrawlService:
             f"任务已创建，等待执行：区县 {len(districts)} 个，每区 {max_pages} 页，并发 {max_workers}",
         )
         return task
+
+    @staticmethod
+    def update_task(task_id: int, payload: dict) -> CrawlTask:
+        task = db.session.get(CrawlTask, task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        if task.status in {"running", "cancel_requested"}:
+            raise ValueError("运行中的任务不能编辑")
+
+        resolved = CrawlService._resolve_task_payload(payload)
+        task.name = resolved["name"]
+        task.source = resolved["source"]
+        task.mode = resolved["mode"]
+        task.max_pages = resolved["max_pages"]
+        task.max_workers = resolved["max_workers"]
+        task.total_pages = len(resolved["districts"]) * resolved["max_pages"]
+        task.set_districts(resolved["districts"])
+        task.status = "pending"
+        task.success_pages = 0
+        task.failed_pages = 0
+        task.total_found = 0
+        task.inserted_count = 0
+        task.updated_count = 0
+        task.unchanged_count = 0
+        task.snapshot_count = 0
+        task.error_message = None
+        task.started_at = None
+        task.finished_at = None
+        task.run_id = str(payload.get("run_id") or uuid4())
+        task.set_evidence(
+            {
+                "run_id": task.run_id,
+                "mode": task.mode,
+                "districts": resolved["districts"],
+                "max_pages": task.max_pages,
+                "max_workers": task.max_workers,
+                "status_history": [{"status": "pending", "at": datetime.utcnow().isoformat(sep=" ")}],
+            }
+        )
+        CrawlLog.query.filter_by(task_id=task.id).delete()
+        db.session.commit()
+        CrawlService.add_log(
+            task.id,
+            "INFO",
+            f"任务已更新，等待执行：区县 {len(resolved['districts'])} 个，每区 {task.max_pages} 页，并发 {task.max_workers}",
+        )
+        return task
+
+    @staticmethod
+    def delete_task(task_id: int) -> None:
+        task = db.session.get(CrawlTask, task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        if task.status in {"running", "cancel_requested"}:
+            raise ValueError("运行中的任务不能删除")
+        db.session.delete(task)
+        db.session.commit()
 
     @staticmethod
     def list_tasks(page: int = 1, page_size: int = 20) -> dict:

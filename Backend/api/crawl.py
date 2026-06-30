@@ -40,6 +40,27 @@ def get_task(task_id: int):
     return api_success(task.to_dict(include_logs=True))
 
 
+@bp.put("/tasks/<int:task_id>")
+def update_task(task_id: int):
+    payload = request.get_json(silent=True) or {}
+    try:
+        task = CrawlService.update_task(task_id, payload)
+        if payload.get("run_now"):
+            task = CrawlService.run_task(task.id)
+        return api_success(task.to_dict(include_logs=True))
+    except ValueError as exc:
+        return api_error(str(exc), status_code=400)
+
+
+@bp.delete("/tasks/<int:task_id>")
+def delete_task(task_id: int):
+    try:
+        CrawlService.delete_task(task_id)
+        return api_success({"id": task_id, "deleted": True})
+    except ValueError as exc:
+        return api_error(str(exc), status_code=400)
+
+
 @bp.post("/tasks/<int:task_id>/run")
 def run_task(task_id: int):
     try:

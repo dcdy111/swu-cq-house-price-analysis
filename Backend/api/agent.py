@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, Response, request
 
-from Backend.agent.agent_service import AgentService
+from Backend.agent.agent_service import AgentChatError, AgentService
 from Backend.services.report_export_service import ReportExportService
 from Backend.utils.response import api_error, api_success
 
@@ -22,6 +22,8 @@ def chat():
         return api_success(AgentService().chat(payload))
     except ValueError as exc:
         return api_error(str(exc), status_code=400)
+    except AgentChatError as exc:
+        return api_error(str(exc), status_code=502, data=exc.data)
 
 
 @bp.get("/agent/sessions")

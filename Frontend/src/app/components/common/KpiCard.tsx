@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState, useRef } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { TrendingUp, TrendingDown } from "lucide-react";
 
 interface KpiCardProps {
@@ -10,56 +10,6 @@ interface KpiCardProps {
   icon?: ReactNode;
   accent?: boolean;
   delay?: number;
-}
-
-function AnimatedNumber({ value }: { value: string }) {
-  const [displayValue, setDisplayValue] = useState("0");
-  const [hasAnimated, setHasAnimated] = useState(false);
-  const ref = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && !hasAnimated) {
-          setHasAnimated(true);
-          const numStr = value.replace(/[^0-9.]/g, "");
-          if (numStr) {
-            const target = parseFloat(numStr);
-            const duration = 1500;
-            const startTime = performance.now();
-            const start = 0;
-
-            const animate = (currentTime: number) => {
-              const elapsed = currentTime - startTime;
-              const progress = Math.min(elapsed / duration, 1);
-              const easeProgress = 1 - Math.pow(1 - progress, 4);
-              const current = Math.floor(start + (target - start) * easeProgress);
-              setDisplayValue(current.toLocaleString());
-
-              if (progress < 1) {
-                requestAnimationFrame(animate);
-              } else {
-                setDisplayValue(value);
-              }
-            };
-
-            requestAnimationFrame(animate);
-          } else {
-            setDisplayValue(value);
-          }
-        }
-      },
-      { threshold: 0.5 }
-    );
-
-    if (ref.current) {
-      observer.observe(ref.current);
-    }
-
-    return () => observer.disconnect();
-  }, [value, hasAnimated]);
-
-  return <span ref={ref}>{displayValue}</span>;
 }
 
 export function KpiCard({ title, value, unit, change, changeLabel, icon, accent, delay = 0 }: KpiCardProps) {
@@ -113,7 +63,7 @@ export function KpiCard({ title, value, unit, change, changeLabel, icon, accent,
             fontFamily: "'SF Mono', 'Consolas', monospace"
           }}
         >
-          <AnimatedNumber value={value} />
+          {value}
         </span>
         {unit && (
           <span style={{ fontSize: 13, color: accent ? "rgba(255,255,255,0.6)" : "#9CA3AF", marginBottom: 2 }}>

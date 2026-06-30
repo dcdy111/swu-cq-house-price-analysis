@@ -486,6 +486,7 @@ export interface PriceTrendItem {
   avg_unit_price: number;
   avg_total_price: number;
   listing_count: number;
+  granularity?: "hour" | "day" | "month";
 }
 
 export interface PriceTrendResult {
@@ -586,7 +587,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(`后端接口 JSON 解析失败(${response.status})，请检查当前后端服务是否为最新代码。`);
   }
   if (!response.ok || payload.code !== 0) {
-    throw new Error(payload.message || `请求失败: ${response.status}`);
+    const error = new Error(payload.message || `请求失败: ${response.status}`) as Error & {
+      data?: unknown;
+      status?: number;
+    };
+    error.data = payload.data;
+    error.status = response.status;
+    throw error;
   }
   return payload.data;
 }
@@ -654,6 +661,9 @@ export const api = {
   getCrawlTasks() {
     return request<CrawlTaskList>("/api/crawl/tasks");
   },
+  getCrawlTask(taskId: number) {
+    return request<CrawlTask>(`/api/crawl/tasks/${taskId}`);
+  },
   createCrawlTask(payload: {
     name: string;
     source: string;
@@ -667,6 +677,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+  updateCrawlTask(taskId: number, payload: {
+    name: string;
+    source: string;
+    districts: string[];
+    max_pages: number;
+    max_workers: number;
+    mode: string;
+    run_now?: boolean;
+  }) {
+    return request<CrawlTask>(`/api/crawl/tasks/${taskId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteCrawlTask(taskId: number) {
+    return request<{ id: number; deleted: boolean }>(`/api/crawl/tasks/${taskId}`, { method: "DELETE" });
   },
   runCrawlTask(taskId: number) {
     return request<CrawlTask>(`/api/crawl/tasks/${taskId}/run`, { method: "POST" });

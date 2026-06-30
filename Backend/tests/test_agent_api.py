@@ -1,10 +1,62 @@
 from __future__ import annotations
 
-from Backend.agent.deepseek_client import DeepSeekClient
+import pytest
+
+from Backend.agent.deepseek_client import DeepSeekClient, DeepSeekInvocationError
 from Backend.extensions import db
 from Backend.models.agent import AgentSession, AgentToolCall, AgentTurn, GeneratedReport
 from Backend.services.analysis_service import AnalysisService
 from Backend.services.listing_service import ListingService
+
+
+def build_stub_deepseek_answer(evidence: dict) -> str:
+    report = evidence.get("report") or {}
+    market = evidence.get("market") or {}
+    buyer_options = evidence.get("buyer_options") or {}
+    model = evidence.get("model") or {}
+
+    if report.get("report"):
+        item = report["report"]
+        return f"**结论**\n已生成《{item['title']}》。"
+
+    if buyer_options:
+        summary = buyer_options.get("summary") or {}
+        items = buyer_options.get("items") or []
+        if items:
+            listing = items[0].get("listing") or {}
+            return "\n".join(
+                [
+                    "**结论**",
+                    f"优先推荐 {listing.get('title')}。",
+                    "",
+                    "**关键证据**",
+                    f"通勤代理说明：{summary.get('commute_note')}",
+                ]
+            )
+        return f"**结论**\n通勤代理说明：{summary.get('commute_note')}"
+
+    districts = market.get("district_items") or []
+    requested_district = (market.get("query") or {}).get("requested_district")
+    if requested_district and not districts:
+        return f"**结论**\n未查询到 {requested_district} 的有效房源，不能用全市均价替代。"
+    if districts:
+        item = districts[0]
+        return (
+            f"**结论**\n{item.get('district')} 当前平均挂牌单价为 "
+            f"{item.get('avg_unit_price', 0)} 元/平方米，样本量 {item.get('listing_count', 0)} 套。"
+        )
+    if model:
+        return "**结论**\n已返回真实模型结果。"
+    return "**结论**\n已返回真实工具结果。"
+
+
+@pytest.fixture(autouse=True)
+def stub_deepseek_generate_answer(monkeypatch):
+    def fake_generate_answer(question: str, evidence: dict):
+        answer = build_stub_deepseek_answer(evidence)
+        return answer, "deepseek-test-stub"
+
+    monkeypatch.setattr(DeepSeekClient, "generate_answer", staticmethod(fake_generate_answer))
 
 
 def seed_agent_data():
@@ -72,6 +124,37 @@ def test_agent_session_groups_turns_and_tool_traces(client):
     assert all(turn["tool_calls"] for turn in payload["turns"])
 
 
+def test_agent_chat_rewrites_legacy_local_session_id(client):
+    seed_agent_data()
+
+    response = client.post(
+        "/api/agent/chat",
+        json={"session_id": "local-default", "question": "渝北区均价是多少？"},
+    )
+    payload = response.get_json()["data"]
+
+    assert response.status_code == 200
+    assert payload["session_id"].startswith("agent-")
+    assert payload["session_id"] != "local-default"
+    assert AgentSession.query.filter_by(session_id="local-default").count() == 0
+
+
+def test_agent_list_sessions_excludes_legacy_local_sessions(client):
+    db.session.add_all(
+        [
+            AgentSession(session_id="local-legacy", title="旧本地会话"),
+            AgentSession(session_id="agent-visible", title="可见会话"),
+        ]
+    )
+    db.session.commit()
+
+    items = client.get("/api/agent/sessions").get_json()["data"]["items"]
+    ids = {item["session_id"] for item in items}
+
+    assert "local-legacy" not in ids
+    assert "agent-visible" in ids
+
+
 def test_agent_business_tools_are_read_only(client):
     items = client.get("/api/agent/tools").get_json()["data"]["items"]
     names = {item["name"] for item in items}
@@ -127,7 +210,7 @@ def test_agent_report_generation_is_persisted_and_readable(client):
     assert "market" in report_payload["data"]["evidence"]
     runtime = report_payload["data"]["evidence"]["agent_runtime"]
     assert runtime["response_model"] == data["model"]
-    assert runtime["deepseek_used"] is ("fallback" not in data["model"])
+    assert runtime["deepseek_used"] is True
     assert runtime["tool_names"] == tool_names
     assert runtime["answer_length"] == len(data["answer"])
 
@@ -217,3 +300,24 @@ def test_deepseek_grounding_guard_accepts_tool_numbers_and_rejects_external_clai
     )
     assert not DeepSeekClient._is_grounded_answer("平均挂牌单价为 12,000 元/平方米。", evidence)
     assert not DeepSeekClient._is_grounded_answer("建议再结合近期成交价判断。", evidence)
+
+
+def test_agent_chat_returns_error_when_deepseek_fails_without_local_fallback(client, monkeypatch):
+    seed_agent_data()
+
+    def raise_error(question: str, evidence: dict):
+        raise DeepSeekInvocationError("DeepSeek 真实请求失败")
+
+    monkeypatch.setattr(DeepSeekClient, "generate_answer", staticmethod(raise_error))
+
+    response = client.post(
+        "/api/agent/chat",
+        json={"session_id": "deepseek-failed", "question": "渝北区均价是多少？"},
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 502
+    assert payload["code"] == 1
+    assert payload["message"] == "DeepSeek 真实请求失败"
+    assert payload["data"]["tool_calls"][0]["tool_name"] == "query_market_stats"
+    assert AgentTurn.query.filter_by(session_id="deepseek-failed", status="failed").count() == 1
