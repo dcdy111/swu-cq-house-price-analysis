@@ -11,6 +11,14 @@
 - MySQL 8.x
 - Windows PowerShell
 
+首次获取仓库后，推荐执行一键安装。脚本只会在配置不存在时从模板创建，不会覆盖已有 `.env` 或 `Frontend/.env.local`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_local.ps1
+```
+
+本地真实数据库密码、DeepSeek Key、爬虫 Cookie 和高德 Key 只填写在 `.env`、`Frontend/.env.local` 或 `data/cookies/`。这些路径已被 `.gitignore` 排除，保留在本机但不会推送到 GitHub。
+
 后端默认数据库连接：
 
 ```text
@@ -49,6 +57,12 @@ SELECT COUNT(*) FROM listing_snapshots;
 ```powershell
 pip install -r requirements.txt
 python -m flask --app Backend.app run --debug --port 5000
+```
+
+也可以在项目根目录同时启动前后端：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_local_dev.ps1
 ```
 
 健康检查：

@@ -12,26 +12,21 @@ $FrontendUrl = "http://127.0.0.1:$FrontendPort"
 New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
 
 function Test-PortInUse([int]$Port) {
-  return [bool](Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue)
+  return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
 function Test-BackendCompatibility {
   try {
     $health = Invoke-WebRequest -Uri "$BackendUrl/api/health" -UseBasicParsing -TimeoutSec 5
-    $login = Invoke-WebRequest `
-      -Uri "$BackendUrl/api/auth/login" `
-      -Method POST `
-      -ContentType "application/json" `
-      -Body '{"username":"admin","password":"swu@2026"}' `
-      -UseBasicParsing `
-      -SkipHttpErrorCheck `
-      -TimeoutSec 5
     $healthJson = $health.Headers["Content-Type"] -match "application/json"
-    $loginJson = $login.Headers["Content-Type"] -match "application/json"
-    return $healthJson -and $loginJson -and ($login.StatusCode -lt 500)
+    return $healthJson -and ($health.StatusCode -eq 200)
   } catch {
     return $false
   }
+}
+
+if (-not (Test-Path -LiteralPath (Join-Path $FrontendDir "node_modules"))) {
+  throw "Frontend dependencies are missing. Run scripts/setup_local.ps1 first."
 }
 
 if (Test-PortInUse $BackendPort) {
@@ -72,7 +67,17 @@ $frontend = Start-Process `
   -WindowStyle Hidden `
   -PassThru
 
-Start-Sleep -Seconds 3
+for ($attempt = 0; $attempt -lt 40 -and -not (Test-PortInUse $FrontendPort); $attempt += 1) {
+  Start-Sleep -Milliseconds 500
+}
+
+if (-not (Test-BackendCompatibility)) {
+  throw "Backend failed to start. Check $backendErr."
+}
+
+if (-not (Test-PortInUse $FrontendPort)) {
+  throw "Frontend failed to start. Check $frontendErr."
+}
 
 Write-Host "Frontend URL: $FrontendUrl"
 Write-Host "Backend URL: $BackendUrl"
