@@ -18,7 +18,6 @@ NUMERIC_FEATURE_NAMES = [
     "建筑面积",
     "室数",
     "厅数",
-    "房龄",
     "楼层等级数值",
     "区县目标编码",
     "楼盘目标编码",
@@ -40,6 +39,16 @@ def _round(value, digits: int = 2):
     if value is None:
         return None
     return round(float(value), digits)
+
+
+def _numeric_or_none(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -271,7 +280,7 @@ class AnalysisService:
                 "halls": float(item.halls or 0),
                 "orientation": item.orientation,
                 "decoration": item.decoration,
-                "house_age": float(item.house_age or 0),
+                "house_age": _numeric_or_none(item.house_age),
                 "floor_score": _floor_score(item.floor_level),
                 "floor_level": item.floor_level or "unknown",
                 "quality": int(item.data_quality_score or 0),
@@ -537,7 +546,7 @@ class AnalysisService:
         return {
             "result_type": "regression",
             "model_name": "Ridge 线性基线",
-            "summary": "以面积、户型、房龄、楼层和区县均价为特征，对挂牌单价进行辅助估计。",
+            "summary": "以面积、户型、楼层、区县均价等特征，对挂牌单价进行辅助估计。",
             "metrics": {
                 "status": "ok",
                 "target": "unit_price",
@@ -565,6 +574,7 @@ class AnalysisService:
                 "feature_groups": AnalysisService._feature_groups(),
                 "features": model["feature_names"],
                 "target_encoding": model["encoder"].get("target_encoding_note"),
+                "house_age_policy": model["encoder"].get("house_age_policy"),
                 "exclusion_policy": exclusion["policy"],
                 "split_rule": "按房源 ID 排序后取后 20% 作为测试集，保证结果可复现。",
             },
@@ -1055,6 +1065,7 @@ class AnalysisService:
                 "feature_groups": AnalysisService._feature_groups(),
                 "features": encoder["feature_names"],
                 "target_encoding": encoder.get("target_encoding_note"),
+                "house_age_policy": encoder.get("house_age_policy"),
                 "exclusion_policy": exclusion["policy"],
                 "algorithm": best["algorithm"],
                 "candidate_algorithms": [item["algorithm"] for item in comparison],
@@ -1082,6 +1093,7 @@ class AnalysisService:
                 "feature_groups": AnalysisService._feature_groups(),
                 "features": encoder["feature_names"],
                 "target_encoding": encoder.get("target_encoding_note"),
+                "house_age_policy": encoder.get("house_age_policy"),
                 "exclusion_policy": exclusion["policy"],
                 "algorithm": candidate["algorithm"],
                 "selection_rule": "候选模型参与同一训练/测试切分下的 R²、RMSE、MAE 对比。",
@@ -1153,7 +1165,10 @@ class AnalysisService:
                 "summary": "可用样本少于 4 条，暂不进行聚类分层。",
                 "metrics": {"status": "insufficient_sample", "sample_count": len(records), "cluster_count": 0},
                 "artifacts": {"clusters": [], "points": []},
-                "evidence": {"features": ["挂牌单价", "面积", "房龄"]},
+                "evidence": {
+                    "features": ["挂牌单价", "面积"],
+                    "house_age_policy": AnalysisService._house_age_policy(False, None),
+                },
             }
 
         try:
@@ -1170,10 +1185,17 @@ class AnalysisService:
         from sklearn.metrics import silhouette_score
         from sklearn.preprocessing import StandardScaler
 
-        features = [
-            [item["unit_price"], item["total_price"], item["area"], item["house_age"]]
-            for item in records
-        ]
+        house_age_fill = AnalysisService._house_age_fill(records)
+        use_house_age = house_age_fill is not None
+        feature_names = ["挂牌单价", "挂牌总价", "面积"]
+        features = []
+        for item in records:
+            row = [item["unit_price"], item["total_price"], item["area"]]
+            if use_house_age:
+                row.append(AnalysisService._house_age_for_model(item, house_age_fill))
+            features.append(row)
+        if use_house_age:
+            feature_names.append("房龄（缺失按样本中位数填补）")
         scaler = StandardScaler()
         scaled = scaler.fit_transform(features)
         max_k = min(4, len(records) - 1)
@@ -1204,7 +1226,7 @@ class AnalysisService:
                     "avg_unit_price": _round(mean(item["unit_price"] for item in items), 2),
                     "avg_total_price": _round(mean(item["total_price"] for item in items), 2),
                     "avg_area": _round(mean(item["area"] for item in items), 2),
-                    "avg_house_age": _round(mean(item["house_age"] for item in items), 2),
+                    "avg_house_age": AnalysisService._optional_mean(item.get("house_age") for item in items),
                     "top_districts": Counter(item["district"] for item in items).most_common(3),
                 }
             )
@@ -1216,7 +1238,7 @@ class AnalysisService:
                 "district": item["district"],
                 "unit_price": _round(item["unit_price"], 2),
                 "area": _round(item["area"], 2),
-                "house_age": _round(item["house_age"], 2),
+                "house_age": _round(_numeric_or_none(item.get("house_age")), 2),
                 "cluster": int(labels[index]),
                 "label": label_map[int(labels[index])],
             }
@@ -1231,14 +1253,14 @@ class AnalysisService:
                     "unit_price": _round(center[0], 2),
                     "total_price": _round(center[1], 2),
                     "area": _round(center[2], 2),
-                    "house_age": _round(center[3], 2),
+                    "house_age": _round(center[3], 2) if use_house_age else None,
                 }
             )
 
         return {
             "result_type": "cluster",
             "model_name": "sklearn KMeans 价值分层",
-            "summary": f"按挂牌单价、总价、面积和房龄自动选择 {k} 个价值层级，轮廓系数为 {_round(score, 4)}。",
+            "summary": f"按{ '、'.join(feature_names[:3]) }等特征自动选择 {k} 个价值层级，轮廓系数为 {_round(score, 4)}。",
             "metrics": {
                 "status": "ok",
                 "sample_count": len(records),
@@ -1249,7 +1271,8 @@ class AnalysisService:
             },
             "artifacts": {"clusters": profiles, "points": points, "centers": centers},
             "evidence": {
-                "features": ["挂牌单价", "挂牌总价", "面积", "房龄"],
+                "features": feature_names,
+                "house_age_policy": AnalysisService._house_age_policy(use_house_age, house_age_fill),
                 "algorithm": "sklearn.cluster.KMeans",
                 "scaler": "sklearn.preprocessing.StandardScaler",
                 "selection_rule": "在 k=2..4 中按 silhouette_score 选择最优分层数。",
@@ -1259,7 +1282,7 @@ class AnalysisService:
     @staticmethod
     def _deterministic_cluster_result(records: list[dict]) -> dict:
         k = 4 if len(records) >= 8 else max(2, min(3, len(records)))
-        assignments, centers = AnalysisService._kmeans(records, k=k)
+        assignments, centers, feature_names, house_age_fill = AnalysisService._kmeans(records, k=k)
         grouped: dict[int, list[dict]] = defaultdict(list)
         for item, cluster_id in zip(records, assignments):
             grouped[cluster_id].append(item)
@@ -1278,7 +1301,7 @@ class AnalysisService:
                     "avg_unit_price": _round(mean(item["unit_price"] for item in items), 2),
                     "avg_total_price": _round(mean(item["total_price"] for item in items), 2),
                     "avg_area": _round(mean(item["area"] for item in items), 2),
-                    "avg_house_age": _round(mean(item["house_age"] for item in items), 2),
+                    "avg_house_age": AnalysisService._optional_mean(item.get("house_age") for item in items),
                     "top_districts": Counter(item["district"] for item in items).most_common(3),
                 }
             )
@@ -1290,7 +1313,7 @@ class AnalysisService:
                 "district": item["district"],
                 "unit_price": _round(item["unit_price"], 2),
                 "area": _round(item["area"], 2),
-                "house_age": _round(item["house_age"], 2),
+                "house_age": _round(_numeric_or_none(item.get("house_age")), 2),
                 "cluster": assignments[index],
                 "label": label_map[assignments[index]],
             }
@@ -1300,10 +1323,14 @@ class AnalysisService:
         return {
             "result_type": "cluster",
             "model_name": "KMeans 价值分层",
-            "summary": f"按挂牌单价、面积和房龄将有效样本划分为 {k} 类，用于识别不同价值层级。",
+            "summary": f"按{ '、'.join(feature_names) }将有效样本划分为 {k} 类，用于识别不同价值层级。",
             "metrics": {"status": "ok", "sample_count": len(records), "cluster_count": k, "iterations": 15},
             "artifacts": {"clusters": profiles, "points": points, "centers": centers},
-            "evidence": {"features": ["挂牌单价", "面积", "房龄"], "algorithm": "deterministic_kmeans"},
+            "evidence": {
+                "features": feature_names,
+                "house_age_policy": AnalysisService._house_age_policy(house_age_fill is not None, house_age_fill),
+                "algorithm": "deterministic_kmeans",
+            },
         }
 
     @staticmethod
@@ -1331,10 +1358,17 @@ class AnalysisService:
         from sklearn.ensemble import IsolationForest
         from sklearn.preprocessing import StandardScaler
 
-        features = [
-            [item["unit_price"], item["total_price"], item["area"], item["house_age"], item["floor_score"]]
-            for item in records
-        ]
+        house_age_fill = AnalysisService._house_age_fill(records)
+        use_house_age = house_age_fill is not None
+        feature_names = ["挂牌单价", "挂牌总价", "面积", "楼层等级"]
+        features = []
+        for item in records:
+            row = [item["unit_price"], item["total_price"], item["area"], item["floor_score"]]
+            if use_house_age:
+                row.append(AnalysisService._house_age_for_model(item, house_age_fill))
+            features.append(row)
+        if use_house_age:
+            feature_names.append("房龄（缺失按样本中位数填补）")
         scaled = StandardScaler().fit_transform(features)
         contamination = min(0.08, max(0.02, 10 / max(len(records), 1)))
         model = IsolationForest(n_estimators=160, contamination=contamination, random_state=42)
@@ -1406,7 +1440,8 @@ class AnalysisService:
             },
             "artifacts": {"items": anomalies[:100]},
             "evidence": {
-                "features": ["挂牌单价", "挂牌总价", "面积", "房龄", "楼层等级"],
+                "features": feature_names,
+                "house_age_policy": AnalysisService._house_age_policy(use_house_age, house_age_fill),
                 "algorithm": "sklearn.ensemble.IsolationForest",
                 "scaler": "sklearn.preprocessing.StandardScaler",
                 "threshold": "IsolationForest 孤立样本，或同时满足区县基准偏离 50% 与全局 z-score 绝对值不低于 2.5",
@@ -1569,8 +1604,49 @@ class AnalysisService:
         return [augmented[index][-1] for index in range(size)]
 
     @staticmethod
-    def _kmeans(records: list[dict], k: int) -> tuple[list[int], list[dict]]:
-        points = [[item["unit_price"], item["area"], item["house_age"]] for item in records]
+    def _optional_mean(values: Iterable[float | int | None]) -> float | None:
+        numeric_values = [
+            number
+            for number in (_numeric_or_none(value) for value in values)
+            if number is not None
+        ]
+        return _round(mean(numeric_values), 2) if numeric_values else None
+
+    @staticmethod
+    def _house_age_fill(records: list[dict]) -> float | None:
+        values = [
+            number
+            for number in (_numeric_or_none(item.get("house_age")) for item in records)
+            if number is not None
+        ]
+        return float(median(values)) if values else None
+
+    @staticmethod
+    def _house_age_for_model(item: dict, fill_value: float | None) -> float:
+        value = _numeric_or_none(item.get("house_age"))
+        if value is not None:
+            return value
+        return float(fill_value or 0.0)
+
+    @staticmethod
+    def _house_age_policy(enabled: bool, fill_value: float | None) -> str:
+        if not enabled:
+            return "当前样本没有可用建成年份/房龄，分析不把未知楼龄当作 0 年。"
+        return f"房龄仅作为模型内部特征使用；缺失值按样本中位数 {_round(fill_value, 2)} 年填补，不在展示层解释为真实楼龄。"
+
+    @staticmethod
+    def _kmeans(records: list[dict], k: int) -> tuple[list[int], list[dict], list[str], float | None]:
+        house_age_fill = AnalysisService._house_age_fill(records)
+        use_house_age = house_age_fill is not None
+        feature_names = ["挂牌单价", "面积"]
+        points = []
+        for item in records:
+            row = [item["unit_price"], item["area"]]
+            if use_house_age:
+                row.append(AnalysisService._house_age_for_model(item, house_age_fill))
+            points.append(row)
+        if use_house_age:
+            feature_names.append("房龄（缺失按样本中位数填补）")
         columns = list(zip(*points))
         means = [mean(column) for column in columns]
         stds = [math.sqrt(mean((value - means[index]) ** 2 for value in column)) or 1.0 for index, column in enumerate(columns)]
@@ -1593,10 +1669,10 @@ class AnalysisService:
                 {
                     "unit_price": _round(center[0] * stds[0] + means[0], 2),
                     "area": _round(center[1] * stds[1] + means[1], 2),
-                    "house_age": _round(center[2] * stds[2] + means[2], 2),
+                    "house_age": _round(center[2] * stds[2] + means[2], 2) if use_house_age else None,
                 }
             )
-        return assignments, original_centers
+        return assignments, original_centers, feature_names, house_age_fill
 
     @staticmethod
     def _distance(left: Iterable[float], right: Iterable[float]) -> float:
@@ -1607,6 +1683,7 @@ class AnalysisService:
         global_mean = mean(item["unit_price"] for item in records)
         district_target = AnalysisService._target_encoding(records, "district", global_mean, smoothing=10)
         community_target = AnalysisService._target_encoding(records, "community", global_mean, smoothing=20)
+        house_age_fill = AnalysisService._house_age_fill(records)
         categories: dict[str, list[str]] = {}
         for field, _label, limit in CATEGORICAL_FEATURE_CONFIG:
             counter = Counter(AnalysisService._category_value(item, field) for item in records)
@@ -1618,15 +1695,19 @@ class AnalysisService:
             categories[field] = values
 
         feature_names = NUMERIC_FEATURE_NAMES[:]
+        if house_age_fill is not None:
+            feature_names.insert(3, "房龄（缺失按样本中位数填补）")
         for field, label, _limit in CATEGORICAL_FEATURE_CONFIG:
             feature_names.extend(f"{label}={value}" for value in categories[field])
         return {
             "global_mean": global_mean,
             "district_target": district_target,
             "community_target": community_target,
+            "house_age_fill": house_age_fill,
             "categories": categories,
             "feature_names": feature_names,
             "target_encoding_note": "区县/楼盘目标编码仅由训练集计算，并使用全局均值平滑；未知楼盘回退到全局均值。",
+            "house_age_policy": AnalysisService._house_age_policy(house_age_fill is not None, house_age_fill),
         }
 
     @staticmethod
@@ -1639,13 +1720,14 @@ class AnalysisService:
             float(item["area"]),
             float(item["rooms"]),
             float(item["halls"]),
-            float(item["house_age"]),
             float(item["floor_score"]),
             float(district_item.get("value", encoder["global_mean"])),
             float(community_item.get("value", encoder["global_mean"])),
             math.log1p(float(district_item.get("count", 0))),
             math.log1p(float(community_item.get("count", 0))),
         ]
+        if encoder.get("house_age_fill") is not None:
+            features.insert(3, AnalysisService._house_age_for_model(item, encoder["house_age_fill"]))
         for field, _label, _limit in CATEGORICAL_FEATURE_CONFIG:
             value = AnalysisService._category_value(item, field)
             features.extend(1.0 if value == category else 0.0 for category in encoder["categories"][field])
@@ -1727,7 +1809,7 @@ class AnalysisService:
     @staticmethod
     def _feature_groups() -> list[str]:
         return [
-            "数值特征：面积、室数、厅数、房龄、楼层等级、区县/楼盘目标编码、样本量强度",
+            "数值特征：面积、室数、厅数、楼层等级、区县/楼盘目标编码、样本量强度；房龄仅在样本有有效建成年份时启用",
             "分类特征：来源、区县、户型、朝向、装修、楼层",
             "训练策略：回归训练前排除极端挂牌单价和面积异常样本，EDA/异常检测仍保留原始样本。",
         ]

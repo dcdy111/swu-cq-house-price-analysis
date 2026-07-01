@@ -865,7 +865,7 @@ python scripts/verify_incremental_snapshot.py
 python scripts/export_acceptance_evidence.py
 python scripts/local_demo_smoke.py --base-url http://127.0.0.1:5000""")
     add_heading(doc, "7. 常见问题", 1)
-    add_table(doc, ["现象", "处理"], [["数据库连接失败", "核对MySQL进程、端口、库名和DATABASE_URL"], ["前端接口失败", "确认5000端口后端运行，检查VITE_API_BASE_URL"], ["采集部分失败", "查看crawl_logs；遇验证码停止重试，不做绕过"], ["Agent不可用", "在设置页执行真实连接测试，检查模型与密钥"], ["调度器未运行", "本地默认关闭；部署前再开启SCHEDULER_ENABLED"]], [3000, 6120])
+    add_table(doc, ["现象", "处理"], [["数据库连接失败", "核对MySQL进程、端口、库名和DATABASE_URL"], ["前端接口失败", "确认后端固定运行在5000端口，前端固定运行在5173端口"], ["采集部分失败", "查看crawl_logs；遇验证码停止重试，不做绕过"], ["Agent不可用", "在设置页执行真实连接测试，检查模型与密钥"], ["调度器未运行", "本地默认关闭；部署前再开启SCHEDULER_ENABLED"]], [3000, 6120])
     add_heading(doc, "8. 数据口径", 1)
     p(doc, f"当前业务库有效房源 {e['database']['valid_listings']:,} 条，其中新系统 fang 标准数据 {e['database']['source_counts']['fang']} 条，其余主要为旧库冷启动基线。所有价格均为挂牌价/报价。")
     out = OUTPUT_DIR / f"{TITLE}_安装与使用说明.docx"

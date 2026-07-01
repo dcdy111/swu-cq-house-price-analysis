@@ -12,6 +12,7 @@ from Backend.models.snapshot import ListingSnapshot
 
 MIN_ANALYSIS_QUALITY = 80
 STRICT_TARGET_COUNT = 50_000
+REAL_SOURCES = ("fang", "anjuke_mobile", "lianjia")
 QUALITY_WEIGHTS = {
     "completeness": 0.25,
     "uniqueness": 0.15,
@@ -73,7 +74,7 @@ class QualityService:
 
         ready_condition = _analysis_ready_condition()
         legacy_condition = _legacy_condition()
-        new_standard_condition = db.not_(legacy_condition)
+        new_standard_condition = Listing.source.in_(REAL_SOURCES)
 
         overview_row = db.session.query(
             db.func.count(Listing.id).label("total_count"),
@@ -95,7 +96,7 @@ class QualityService:
 
         snapshot_count = db.session.query(db.func.count(ListingSnapshot.id)).scalar() or 0
         strict_count = int(overview_row.strict_new_standard_count or 0)
-        mode = "new_standard_primary" if strict_count >= STRICT_TARGET_COUNT else "hybrid_cold_start"
+        mode = "database_only_real_sources" if strict_count >= STRICT_TARGET_COUNT else "database_only_quality_filtered"
 
         dimension_scores = QualityService._dimension_scores(int(total_count))
         weighted_quality = round(
@@ -118,7 +119,7 @@ class QualityService:
                 "missing_count": int(overview_row.missing_count or 0),
                 "low_quality_count": int(overview_row.low_quality_count or 0),
                 "recommended_mode": mode,
-                "recommended_mode_label": "新标准样本优先" if mode == "new_standard_primary" else "冷启动混合基线",
+                "recommended_mode_label": "真实来源优先" if mode == "database_only_real_sources" else "质量过滤优先",
             },
             "source_layers": QualityService._source_layers(),
             "quality_buckets": QualityService._quality_buckets(),
@@ -203,6 +204,22 @@ class QualityService:
             "validity": validity,
             "verifiability": verifiability,
         }
+        evidence = {
+            "completeness": f"6 个关键字段合计填充率：{round(completeness, 2)}%",
+            "uniqueness": f"source + fingerprint 唯一比例：{round(uniqueness, 2)}%",
+            "consistency": f"总价/面积推导单价与原单价误差 <= 12% 的比例：{round(consistency, 2)}%",
+            "timeliness": f"近 30 天仍被采集到且 active/valid 的比例：{round(timeliness, 2)}%",
+            "validity": f"价格、面积、区县、链接落在业务规则内的比例：{round(validity, 2)}%",
+            "verifiability": f"来源、来源房源 ID、HTTP 链接、价格一致性可核验比例：{round(verifiability, 2)}%",
+        }
+        definitions = {
+            "completeness": "标题、链接、区县、总价、单价、面积是否齐全。",
+            "uniqueness": "同一来源下 fingerprint 是否能稳定去重。",
+            "consistency": "总价、单价、面积三者是否互相匹配。",
+            "timeliness": "最近采集时间是否足够新，避免过期挂牌样本影响分析。",
+            "validity": "价格、面积、区县、链接是否落在可解释业务范围内。",
+            "verifiability": "是否具备来源 ID、链接和字段一致性，便于抽样回看源页面。",
+        }
         labels = {
             "completeness": "完整性",
             "uniqueness": "唯一性",
@@ -217,6 +234,8 @@ class QualityService:
                 "label": labels[key],
                 "score": round(max(0.0, min(100.0, float(values[key]))), 2),
                 "weight": QUALITY_WEIGHTS[key],
+                "definition": definitions[key],
+                "evidence": evidence[key],
             }
             for key in QUALITY_WEIGHTS
         ]
@@ -224,13 +243,13 @@ class QualityService:
     @staticmethod
     def _methodology() -> dict:
         return {
-            "framework": "ISO/IEC 25012 + Government Data Quality Framework",
+            "framework": "ISO/IEC 25012 + 项目规则引擎",
             "purpose": "重庆二手房挂牌价分析与辅助建模",
             "freshness_sla_days": 30,
             "price_consistency_tolerance": 0.12,
             "weights": QUALITY_WEIGHTS,
             "verifiability_note": "可核验性只衡量来源 ID、链接、字段内部一致性与抽样核验准备度，不等同于真实准确率；真实准确性仍需源页面抽查或跨来源核验。",
-            "version": "dq-v2.0",
+            "version": "dq-v2.1",
         }
 
     @staticmethod
@@ -314,6 +333,7 @@ class QualityService:
                 db.func.min(Listing.unit_price).label("min_unit_price"),
                 db.func.max(Listing.unit_price).label("max_unit_price"),
             )
+            .filter(Listing.source.in_(REAL_SOURCES))
             .group_by(Listing.source)
             .order_by(db.func.count(Listing.id).desc())
             .all()
@@ -322,8 +342,8 @@ class QualityService:
         return [
             {
                 "source": row.source,
-                "layer": "cold_start_baseline" if row.source.endswith("_legacy") else "new_standard_crawl",
-                "layer_label": "旧库冷启动基线" if row.source.endswith("_legacy") else "新标准采集样本",
+                "layer": "legacy_archive" if row.source.endswith("_legacy") else "real_source",
+                "layer_label": "历史归档样本" if row.source.endswith("_legacy") else "真实采集来源",
                 "sample_count": int(row.sample_count or 0),
                 "usable_count": int(row.usable_count or 0),
                 "avg_quality": round(float(row.avg_quality or 0), 2),
@@ -333,9 +353,9 @@ class QualityService:
                 "min_unit_price": float(row.min_unit_price) if row.min_unit_price is not None else None,
                 "max_unit_price": float(row.max_unit_price) if row.max_unit_price is not None else None,
                 "recommended_usage": (
-                    "规模基线、系统冷启动、对照分析；正式建模需按质量分和异常规则过滤"
+                    "仅作历史对照与字段排查，不作为首页总览和正式建模主样本。"
                     if row.source.endswith("_legacy")
-                    else "优先用于后续趋势分析、质量报告、建模训练和跨来源校验"
+                    else "用于首页统计、趋势、质量报告与建模；仍需经过质量分和异常规则过滤。"
                 ),
             }
             for row in rows
@@ -402,7 +422,7 @@ class QualityService:
             {"name": "去重指纹", "description": "按 source + fingerprint 去重，指纹不包含价格，避免价格变化被当成新房源。"},
             {"name": "增量快照", "description": "首次入库写快照；挂牌价或单价变化时追加 listing_snapshots。"},
             {"name": "质量评分", "description": "按关键字段缺失、价格异常、面积异常、建成年份异常扣分。"},
-            {"name": "来源分层", "description": "旧库标为冷启动基线，新爬样本标为新标准采集样本，分析时分层使用。"},
+            {"name": "来源分层", "description": "按 listings.source 区分真实采集来源与历史归档来源，首页与正式分析只优先展示真实来源。"},
             {"name": "异常保留", "description": "异常数据不物理删除，展示待复核原因，建模默认过滤。"},
         ]
 
@@ -413,15 +433,16 @@ class QualityService:
             "default_filters": [
                 "status in ('active','valid')",
                 "data_quality_score >= 80",
+                "source in ('fang','anjuke_mobile','lianjia')",
                 "total_price between 5 and 5000",
                 "unit_price between 1000 and 100000",
                 "area between 10 and 500",
                 "关键字段 title/link/district/total_price/unit_price/area 不为空",
             ],
             "source_rules": [
-                "旧库 *_legacy 只作为冷启动基线和规模对照，不直接证明真实性。",
-                "新采集来源 fang/anjuke_mobile/lianjia 使用当前标准字段和质量评分入库。",
-                "当新标准可用样本不足 50,000 时，系统采用冷启动混合基线；达到规模后切换为新标准样本优先。",
+                "首页、质量页和分析建模默认只解释 MySQL 中 3 个真实来源：fang、anjuke_mobile、lianjia。",
+                "历史 *_legacy 来源只保留为对照或排错证据，不作为主视觉口径。",
+                "进入建模训练的样本必须同时满足质量分、字段完整、价格区间和面积区间规则。",
             ],
             "current_mode": mode,
         }
@@ -442,8 +463,8 @@ class QualityService:
                 "extreme_count": 0,
                 "missing_count": 0,
                 "low_quality_count": 0,
-                "recommended_mode": "hybrid_cold_start",
-                "recommended_mode_label": "冷启动混合基线",
+                "recommended_mode": "database_only_quality_filtered",
+                "recommended_mode_label": "质量过滤优先",
             },
             "source_layers": [],
             "quality_buckets": [],
@@ -451,5 +472,5 @@ class QualityService:
             "methodology": QualityService._methodology(),
             "abnormal_samples": [],
             "cleaning_steps": QualityService._cleaning_steps(),
-            "analysis_policy": QualityService._analysis_policy("hybrid_cold_start"),
+            "analysis_policy": QualityService._analysis_policy("database_only_quality_filtered"),
         }

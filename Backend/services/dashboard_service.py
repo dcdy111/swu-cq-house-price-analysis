@@ -12,6 +12,7 @@ from Backend.models.snapshot import ListingSnapshot
 
 
 VALID_STATUSES = ("active", "valid")
+REAL_SOURCES = ("fang", "anjuke_mobile", "lianjia")
 OFFICIAL_DISTRICT_NAMES = {
     "万州区",
     "涪陵区",
@@ -54,6 +55,50 @@ OFFICIAL_DISTRICT_NAMES = {
 }
 
 DISTRICT_ALIASES = {
+    "yubei": "渝北区",
+    "yuzhong": "渝中区",
+    "jiangbei": "江北区",
+    "nanan": "南岸区",
+    "nanana": "南岸区",
+    "nan'an": "南岸区",
+    "jiulongpo": "九龙坡区",
+    "shapingba": "沙坪坝区",
+    "dadukou": "大渡口区",
+    "banan": "巴南区",
+    "beibei": "北碚区",
+    "bishan": "璧山区",
+    "jiangjin": "江津区",
+    "yongchuan": "永川区",
+    "hechuan": "合川区",
+    "changshou": "长寿区",
+    "tongliang": "铜梁区",
+    "rongchang": "荣昌区",
+    "dazu": "大足区",
+    "fuling": "涪陵区",
+    "qijiang": "綦江区",
+    "nanchuan": "南川区",
+    "wanzhou": "万州区",
+    "tongnan": "潼南区",
+    "liangping": "梁平区",
+    "kaizhou": "开州区",
+    "qianjiang": "黔江区",
+    "wulong": "武隆区",
+    "chengkou": "城口县",
+    "fengdu": "丰都县",
+    "dianjiang": "垫江县",
+    "dianjiangxian": "垫江县",
+    "dainjiangxian": "垫江县",
+    "zhongxian": "忠县",
+    "yunyang": "云阳县",
+    "fengjie": "奉节县",
+    "wushan": "巫山县",
+    "wuxi": "巫溪县",
+    "shizhu": "石柱土家族自治县",
+    "xiushan": "秀山土家族苗族自治县",
+    "youyang": "酉阳土家族苗族自治县",
+    "pengshui": "彭水苗族土家族自治县",
+    "wansheng": "万盛",
+    "liangjiang": "两江新区",
     "渝中": "渝中区",
     "江北": "江北区",
     "南岸": "南岸区",
@@ -111,6 +156,9 @@ def normalize_district_name(name: str | None) -> str:
     text = str(name).strip()
     if not text:
         return "待复核"
+    lower_text = text.lower()
+    if lower_text in DISTRICT_ALIASES:
+        return DISTRICT_ALIASES[lower_text]
     if text in DISTRICT_ALIASES:
         return DISTRICT_ALIASES[text]
     if text.endswith(("区", "县", "自治县", "新区")):
@@ -124,6 +172,7 @@ def is_official_district_name(name: str | None) -> bool:
 
 def _valid_listing_condition():
     return db.and_(
+        Listing.source.in_(REAL_SOURCES),
         Listing.status.in_(VALID_STATUSES),
         Listing.unit_price.isnot(None),
         Listing.unit_price > 0,
@@ -147,11 +196,17 @@ def _analysis_ready_condition():
 class DashboardService:
     @staticmethod
     def overview() -> dict:
-        total_count = _safe_int(db.session.query(db.func.count(Listing.id)).scalar())
-        active_count = _safe_int(
-            db.session.query(db.func.count(Listing.id)).filter(Listing.status.in_(VALID_STATUSES)).scalar()
+        total_count = _safe_int(
+            db.session.query(db.func.count(Listing.id)).filter(Listing.source.in_(REAL_SOURCES)).scalar()
         )
-        latest_updated_at = db.session.query(db.func.max(Listing.updated_at)).scalar()
+        active_count = _safe_int(
+            db.session.query(db.func.count(Listing.id))
+            .filter(Listing.source.in_(REAL_SOURCES), Listing.status.in_(VALID_STATUSES))
+            .scalar()
+        )
+        latest_updated_at = (
+            db.session.query(db.func.max(Listing.updated_at)).filter(Listing.source.in_(REAL_SOURCES)).scalar()
+        )
         seven_days_ago = datetime.utcnow() - timedelta(days=7)
 
         district_map = DashboardService.district_map()
@@ -167,10 +222,14 @@ class DashboardService:
             db.func.coalesce(db.func.avg(Listing.data_quality_score), 0).label("avg_quality"),
             db.func.sum(case((_analysis_ready_condition(), 1), else_=0)).label("analysis_ready_count"),
             db.func.sum(case((Listing.last_seen_at >= seven_days_ago, 1), else_=0)).label("recent_seen_count"),
-        ).one()
+        ).filter(Listing.source.in_(REAL_SOURCES)).one()
 
-        complete_count = _safe_int(db.session.query(db.func.count(Listing.id)).filter(_valid_listing_condition()).scalar())
-        snapshot_count = _safe_int(db.session.query(db.func.count(ListingSnapshot.id)).scalar())
+        complete_count = _safe_int(
+            db.session.query(db.func.count(Listing.id)).filter(_valid_listing_condition()).scalar()
+        )
+        snapshot_count = _safe_int(
+            db.session.query(db.func.count(ListingSnapshot.id)).filter(ListingSnapshot.source.in_(REAL_SOURCES)).scalar()
+        )
 
         return {
             "kpis": {
@@ -595,6 +654,7 @@ class DashboardService:
                 db.func.coalesce(db.func.avg(Listing.unit_price), 0).label("avg_unit_price"),
                 db.func.coalesce(db.func.avg(Listing.data_quality_score), 0).label("avg_quality"),
             )
+            .filter(Listing.source.in_(REAL_SOURCES))
             .group_by(Listing.source)
             .order_by(db.func.count(Listing.id).desc())
             .all()

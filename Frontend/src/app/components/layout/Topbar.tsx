@@ -165,14 +165,6 @@ export function Topbar({ onLogout }: { onLogout: () => void }) {
               系统设置
             </DropdownMenuItem>
             <DropdownMenuItem 
-              onSelect={() => api.me().then(() => toast.success("当前用户会话有效")).catch(error => toast.error(error.message))}
-              style={{ color: "#1F2937", cursor: "pointer" }}
-            >
-              <CheckCircle2 size={14} />
-              检查会话
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem 
               onSelect={() => { api.logout().catch(() => null); onLogout(); navigate("/login"); }}
               style={{ color: "#DC2626", cursor: "pointer" }}
             >

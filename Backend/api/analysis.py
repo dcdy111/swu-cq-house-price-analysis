@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from flask import Blueprint, request
+from flask import Blueprint, Response, request
 
 from Backend.services.analysis_service import AnalysisService
+from Backend.services.report_export_service import ReportExportService
 from Backend.utils.response import api_error, api_success
 
 
@@ -48,3 +49,17 @@ def get_job(job_id: int):
     if job is None:
         return api_error("分析任务不存在", status_code=404)
     return api_success(job.to_dict(include_results=True))
+
+
+@bp.get("/jobs/<int:job_id>/export.pdf")
+def export_job_pdf(job_id: int):
+    job = AnalysisService.get_job(job_id)
+    if job is None:
+        return api_error("分析任务不存在", status_code=404)
+    pdf = ReportExportService.analysis_job_to_pdf(job)
+    filename = f"analysis-job-{job.id}.pdf"
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

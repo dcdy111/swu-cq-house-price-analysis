@@ -111,12 +111,18 @@ class AgentSession(db.Model):
     )
 
     def to_dict(self, include_turns: bool = False) -> dict:
+        latest_turn = self.turns[-1] if self.turns else None
         data = {
             "session_id": self.session_id,
             "title": self.title,
             "turn_count": len(self.turns),
             "created_at": self.created_at.isoformat(sep=" ") if self.created_at else None,
             "updated_at": self.updated_at.isoformat(sep=" ") if self.updated_at else None,
+            "latest_turn_id": latest_turn.turn_id if latest_turn else None,
+            "latest_question": latest_turn.question if latest_turn else None,
+            "latest_has_answer": bool(str(latest_turn.answer or "").strip()) if latest_turn else False,
+            "latest_status": latest_turn.status if latest_turn else None,
+            "latest_answered_at": latest_turn.finished_at.isoformat(sep=" ") if latest_turn and latest_turn.answer and latest_turn.finished_at else None,
         }
         if include_turns:
             data["turns"] = [turn.to_dict(include_tool_calls=True) for turn in self.turns]

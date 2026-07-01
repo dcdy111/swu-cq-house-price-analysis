@@ -7,7 +7,6 @@ import {
   FileWarning,
   Filter,
   Gauge,
-  History,
   Layers3,
   RefreshCw,
   ShieldCheck,
@@ -32,17 +31,15 @@ function pct(value: number, total: number) {
 
 function sourceLabel(source: string) {
   const labels: Record<string, string> = {
-    anjuke_legacy: "安居客旧库",
-    lianjia_legacy: "链家旧库",
     fang: "房天下",
-    anjuke_mobile: "安居客移动端",
-    lianjia: "链家移动端",
+    anjuke_mobile: "安居客",
+    lianjia: "链家",
   };
   return labels[source] ?? source;
 }
 
 function layerTone(layer: SourceLayer["layer"]) {
-  return layer === "new_standard_crawl"
+  return layer === "real_source" || layer === "new_standard_crawl"
     ? { background: "#E0F2FE", color: "#0369A1", border: "#BAE6FD" }
     : { background: "#FFF7ED", color: "#C2410C", border: "#FED7AA" };
 }
@@ -110,17 +107,13 @@ export function QualityPage() {
   const newStandardRatio = pct(overview.new_standard_count, overview.total_count);
   const readyRatio = pct(overview.analysis_ready_count, overview.total_count);
   const duplicateCount = overview.total_count - overview.distinct_fingerprint;
-  const strictReadyRatio = pct(overview.strict_new_standard_count, overview.total_count);
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 style={{ color: "#163A70", fontSize: 18, fontWeight: 700 }}>数据清洗与质量报告</h2>
-          <p style={{ color: "#6B7280", fontSize: 13, marginTop: 4 }}>
-            按来源分层、质量分和异常规则管理房源挂牌价数据，旧库仅作为冷启动基线。
-          </p>
-        </div>
+          <div>
+            <h2 style={{ color: "#163A70", fontSize: 18, fontWeight: 700 }}>数据清洗与质量报告</h2>
+          </div>
         <Button variant="outline" size="sm" onClick={loadReport} style={{ fontSize: 12 }}>
           <RefreshCw size={14} />
           刷新
@@ -136,22 +129,22 @@ export function QualityPage() {
           accent
         />
         <KpiCard
-          title="新标准样本"
+          title="真实来源样本"
           value={fmt(overview.new_standard_count)}
           unit="条"
           icon={<ShieldCheck size={18} style={{ color: "#16A34A" }} />}
-        />
-        <KpiCard
-          title="旧库冷启动"
-          value={fmt(overview.legacy_count)}
-          unit="条"
-          icon={<History size={18} style={{ color: "#E67E22" }} />}
         />
         <KpiCard
           title="可用于分析"
           value={fmt(overview.analysis_ready_count)}
           unit="条"
           icon={<Filter size={18} style={{ color: "#163A70" }} />}
+        />
+        <KpiCard
+          title="异常区间"
+          value={fmt(overview.extreme_count)}
+          unit="条"
+          icon={<FileWarning size={18} style={{ color: "#E67E22" }} />}
         />
         <KpiCard
           title="平均质量分"
@@ -169,7 +162,6 @@ export function QualityPage() {
 
       <SectionCard
         title="六维数据质量评分"
-        subtitle={`${report.methodology.framework} · ${report.methodology.version} · 总分按业务用途加权`}
       >
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
           {report.dimension_scores.map(item => (
@@ -180,6 +172,12 @@ export function QualityPage() {
               </div>
               <div style={{ color: item.score >= 80 ? "#163A70" : item.score >= 60 ? "#E67E22" : "#DC2626", fontSize: 24, fontWeight: 700, marginTop: 8 }}>
                 {fmt(item.score, 1)}
+              </div>
+              <div style={{ fontSize: 11, color: "#4B5563", marginTop: 6, lineHeight: 1.6 }}>
+                {item.definition}
+              </div>
+              <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 4, lineHeight: 1.5 }}>
+                {item.evidence}
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ background: "#E5EAF2" }}>
                 <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, item.score))}%`, background: item.score >= 80 ? "#4F7DBD" : "#E67E22" }} />
@@ -192,39 +190,45 @@ export function QualityPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="当前分析口径" subtitle="后续分析默认按质量分与来源层级筛选，而不是直接相信旧库">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 flex flex-col gap-3">
+      <SectionCard title="当前分析口径">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2">
               <Badge style={{ background: "#EFF6FF", color: "#163A70", borderColor: "#BFDBFE" }}>
                 {overview.recommended_mode_label}
               </Badge>
               <span style={{ color: "#6B7280", fontSize: 12 }}>
-                新标准样本占总量 {newStandardRatio}%，可用于分析样本占总量 {readyRatio}%，其中新标准可用样本{" "}
-                {fmt(overview.strict_new_standard_count)} 条，占总量 {strictReadyRatio}%
+                真实来源 {newStandardRatio}% · 可分析 {readyRatio}% · 分析样本 {fmt(overview.analysis_ready_count)} 条
               </span>
             </div>
             <p style={{ color: "#1F2937", fontSize: 13, lineHeight: 1.8 }}>
-              {overview.strict_new_standard_count >= 50_000
-                ? "当前新标准可用样本已达到 50,000 条，分析默认采用新标准样本优先口径。"
-                : "当前新标准可用样本尚未达到 50,000 条，系统采用旧库冷启动与新爬样本校验的混合口径。"}
-              旧库不删除，但所有分析、建模和报告都必须显示来源层级，并默认过滤低质量、字段缺失和异常区间样本。
+              当前首页、质量评估和分析建模均以 MySQL 真实房源表为唯一来源；进入分析前会过滤低质量、字段缺失、价格或面积异常的样本。
             </p>
           </div>
-          <div className="flex flex-col gap-2" style={{ fontSize: 12, color: "#4B5563" }}>
-            {report.analysis_policy.default_filters.slice(0, 4).map(rule => (
-              <div key={rule} className="flex items-start gap-2">
-                <CheckCircle2 size={13} style={{ color: "#16A34A", marginTop: 2, flexShrink: 0 }} />
-                <span>{rule}</span>
-              </div>
-            ))}
+          <div className="grid grid-cols-1 gap-4">
+            <div className="flex flex-col gap-2" style={{ fontSize: 12, color: "#4B5563" }}>
+              {report.analysis_policy.default_filters.map(rule => (
+                <div key={rule} className="flex items-start gap-2">
+                  <CheckCircle2 size={13} style={{ color: "#16A34A", marginTop: 2, flexShrink: 0 }} />
+                  <span>{rule}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-col gap-2" style={{ fontSize: 12, color: "#4B5563" }}>
+              {report.analysis_policy.source_rules.map(rule => (
+                <div key={rule} className="flex items-start gap-2">
+                  <Layers3 size={13} style={{ color: "#163A70", marginTop: 2, flexShrink: 0 }} />
+                  <span>{rule}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </SectionCard>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-2">
-          <SectionCard title="来源分层质量" subtitle="区分旧库冷启动基线和当前新标准采集样本" noPad>
+          <SectionCard title="真实来源分层质量" noPad>
             <div className="overflow-auto">
               <table className="w-full" style={{ fontSize: 12 }}>
                 <thead style={{ background: "#F7F9FC", color: "#6B7280" }}>
@@ -270,7 +274,7 @@ export function QualityPage() {
           </SectionCard>
         </div>
 
-        <SectionCard title="质量分布" subtitle="默认 80 分以上进入分析候选集">
+        <SectionCard title="质量分布">
           <div className="flex flex-col gap-4">
             {report.quality_buckets.map(bucket => {
               const width = Math.max(3, Math.round((bucket.count / maxBucket) * 100));
@@ -298,7 +302,7 @@ export function QualityPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <SectionCard title="清洗与整理流程" subtitle="报告中可直接展示的处理过程">
+        <SectionCard title="清洗流程">
           <div className="flex flex-col gap-3">
             {report.cleaning_steps.map((step, index) => (
               <div key={step.name} className="flex gap-3">
@@ -318,7 +322,7 @@ export function QualityPage() {
         </SectionCard>
 
         <div className="xl:col-span-2">
-          <SectionCard title="异常与待复核样例" subtitle="异常保留但默认不进入建模训练" noPad>
+          <SectionCard title="异常样例">
             <div className="overflow-auto">
               <table className="w-full" style={{ fontSize: 12 }}>
                 <thead style={{ background: "#F7F9FC", color: "#6B7280" }}>
@@ -367,7 +371,7 @@ export function QualityPage() {
         </div>
       </div>
 
-      <SectionCard title="答辩展示口径" subtitle="把数据风险说清楚，比假装所有数据都可信更专业">
+      <SectionCard title="来源分层规则">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4" style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
           {report.analysis_policy.source_rules.map(rule => (
             <div key={rule} className="flex items-start gap-2">

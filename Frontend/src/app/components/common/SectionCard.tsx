@@ -22,13 +22,13 @@ export function SectionCard({ title, subtitle, action, children, className = "",
     >
       {(title || action) && (
         <div 
-          className="flex items-center justify-between px-5 py-4"
+          className="flex flex-col items-start gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
           style={{ 
             borderBottom: "1px solid #E5EAF2",
             background: "linear-gradient(90deg, #F8FAFC 0%, #fff 100%)"
           }}
         >
-          <div>
+          <div className="min-w-0">
             {title && (
               <h3 style={{ 
                 fontSize: 14, 
@@ -49,12 +49,12 @@ export function SectionCard({ title, subtitle, action, children, className = "",
               </h3>
             )}
             {subtitle && (
-              <p style={{ fontSize: 12, color: "#9CA3AF", marginTop: 2 }}>
+              <p style={{ fontSize: 12, color: "#9CA3AF", marginTop: 2, lineHeight: 1.5 }}>
                 {subtitle}
               </p>
             )}
           </div>
-          {action}
+          {action && <div className="w-full sm:w-auto">{action}</div>}
         </div>
       )}
       <div className={noPad ? "" : "p-5"}>

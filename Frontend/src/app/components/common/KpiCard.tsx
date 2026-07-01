@@ -23,7 +23,7 @@ export function KpiCard({ title, value, unit, change, changeLabel, icon, accent,
 
   return (
     <div
-      className={`rounded-xl p-5 flex flex-col gap-3 fade-in-up ${visible ? "" : "opacity-0"}`}
+      className={`rounded-lg p-4 flex min-w-0 flex-col gap-3 fade-in-up ${visible ? "" : "opacity-0"}`}
       style={{ 
         animationDelay: `${delay}ms`,
         background: accent ? "#163A70" : "#fff",
@@ -53,10 +53,10 @@ export function KpiCard({ title, value, unit, change, changeLabel, icon, accent,
           </div>
         )}
       </div>
-      <div className="flex items-end gap-1.5">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-1">
         <span 
           style={{ 
-            fontSize: 30, 
+            fontSize: 26,
             fontWeight: 700, 
             color: accent ? "#fff" : "#1F2937",
             lineHeight: 1,

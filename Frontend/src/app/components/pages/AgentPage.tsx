@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ChevronRight, Download, MessageSquare, Send, Sparkles } from "lucide-react";
+import {
+  Activity,
+  ChevronRight,
+  Clipboard,
+  Download,
+  Pencil,
+  Plus,
+  RefreshCcw,
+  Send,
+  Sparkles,
+  Trash2,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
@@ -49,13 +62,36 @@ interface SessionCard {
   title: string;
   time: string;
   turns: number;
+  latestHasAnswer: boolean;
+  latestQuestion?: string | null;
+}
+
+interface SpeechState {
+  messageId: string | null;
+  speaking: boolean;
 }
 
 const QUICK_QUESTIONS = [
-  "渝北区挂牌均价是多少？",
+  "两江新区挂牌均价是多少？",
+  "按区县统计房源数量和平均挂牌单价，并按数量排序",
   "近12月重庆挂牌价走势如何？",
   "帮我生成重庆二手房挂牌价市场分析报告",
 ];
+const ACTIVE_SESSION_STORAGE_KEY = "swu-agent-active-session";
+const TOOL_LABELS: Record<string, string> = {
+  query_market_stats: "市场统计查询",
+  query_readonly_sql: "自然语言 SQL 查询",
+  get_listing_detail: "房源详情查询",
+  compare_districts: "区县对比",
+  get_chart_series: "图表数据查询",
+  get_crawl_status: "采集状态查询",
+  get_model_result: "模型结果查询",
+  generate_report: "报告生成",
+};
+
+function toolLabel(name: string) {
+  return TOOL_LABELS[name] ?? name;
+}
 
 function useTimer(running: boolean) {
   const [elapsed, setElapsed] = useState(0);
@@ -109,6 +145,8 @@ function toSessionCard(item: AgentSessionSummary): SessionCard {
     title: item.title || "未命名会话",
     time: formatRelativeTime(item.updated_at ?? item.created_at),
     turns: item.turn_count,
+    latestHasAnswer: Boolean(item.latest_has_answer),
+    latestQuestion: item.latest_question ?? null,
   };
 }
 
@@ -161,7 +199,7 @@ function ThinkingBubble({ elapsed }: { elapsed: number }) {
         className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
         style={{ background: "#163A70", color: "#fff", fontSize: 11, fontWeight: 700 }}
       >
-        AI
+        助
       </div>
       <div
         className="rounded-2xl px-4 py-3"
@@ -177,9 +215,17 @@ function ThinkingBubble({ elapsed }: { elapsed: number }) {
 function MessageBubble({
   message,
   onSelect,
+  onCopy,
+  onReplay,
+  onToggleSpeech,
+  speaking,
 }: {
   message: Message;
   onSelect?: (message: Message) => void;
+  onCopy?: (message: Message) => void;
+  onReplay?: (message: Message) => void;
+  onToggleSpeech?: (message: Message) => void;
+  speaking?: boolean;
 }) {
   const isUser = message.role === "user";
   const hasActivity = !isUser && ((message.toolTraces?.length ?? 0) > 0 || Boolean(message.report));
@@ -195,7 +241,7 @@ function MessageBubble({
           fontWeight: 700,
         }}
       >
-        {isUser ? "我" : "AI"}
+        {isUser ? "我" : "助"}
       </div>
       <div className={`max-w-[82%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1.5`}>
         <button
@@ -226,6 +272,37 @@ function MessageBubble({
             </div>
           )}
         </button>
+        {!isUser && (
+          <div className="flex items-center gap-2" style={{ marginTop: 2 }}>
+            <button
+              type="button"
+              onClick={() => onCopy?.(message)}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-1"
+              style={{ background: "#F7F9FC", color: "#6B7280", fontSize: 11 }}
+            >
+              <Clipboard size={11} />
+              复制
+            </button>
+            <button
+              type="button"
+              onClick={() => onToggleSpeech?.(message)}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-1"
+              style={{ background: speaking ? "#EFF6FF" : "#F7F9FC", color: speaking ? "#163A70" : "#6B7280", fontSize: 11 }}
+            >
+              {speaking ? <VolumeX size={11} /> : <Volume2 size={11} />}
+              {speaking ? "停止朗读" : "朗读"}
+            </button>
+            <button
+              type="button"
+              onClick={() => onReplay?.(message)}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-1"
+              style={{ background: "#F7F9FC", color: "#6B7280", fontSize: 11 }}
+            >
+              <RefreshCcw size={11} />
+              重新生成
+            </button>
+          </div>
+        )}
         {!isUser && (message.model || message.runtimeText) && (
           <div style={{ fontSize: 11, color: "#9CA3AF" }}>
             {[message.model, message.runtimeText].filter(Boolean).join(" · ")}
@@ -258,7 +335,7 @@ function ActivityPanel({
 
   return (
     <div
-      className="w-[340px] flex-shrink-0 flex flex-col"
+      className="absolute inset-y-0 right-0 z-20 flex w-full flex-shrink-0 flex-col sm:w-[320px] xl:static xl:z-auto xl:w-[320px]"
       style={{ borderLeft: "1px solid #E5EAF2", background: "#fff" }}
     >
       <div
@@ -320,7 +397,7 @@ function ActivityPanel({
                       className="inline-block w-2 h-2 rounded-full"
                       style={{ background: trace.status === "success" ? "#16A34A" : "#DC2626" }}
                     />
-                    {trace.tool}
+                    {toolLabel(trace.tool)}
                   </span>
                   <span style={{ color: "#9CA3AF", fontWeight: 400 }}>{trace.duration}ms</span>
                 </summary>
@@ -443,6 +520,7 @@ export function AgentPage() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
+  const [openingSession, setOpeningSession] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
   const [toolTraces, setToolTraces] = useState<ToolTrace[]>([]);
   const [latestReport, setLatestReport] = useState<GeneratedReport | null>(null);
@@ -451,12 +529,36 @@ export function AgentPage() {
   const [sessions, setSessions] = useState<SessionCard[]>([]);
   const [activeSession, setActiveSession] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
+  const [speechState, setSpeechState] = useState<SpeechState>({ messageId: null, speaking: false });
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const sendingElapsed = useTimer(sending);
+  const activeSessionCard = useMemo(
+    () => sessions.find(item => item.id === activeSession) ?? null,
+    [sessions, activeSession],
+  );
+  const hasMessages = messages.length > 0;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending]);
+  }, [messages, sending, openingSession]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (activeSession) {
+      window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, activeSession);
+    } else {
+      window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+    }
+  }, [activeSession]);
 
   const selectActivity = (message: Message) => {
     setToolTraces(message.toolTraces ?? []);
@@ -468,8 +570,8 @@ export function AgentPage() {
     setActivityOpen(true);
   };
 
-  const resetComposer = () => {
-    setActiveSession(null);
+  const clearConversation = (sessionId: string | null = null) => {
+    setActiveSession(sessionId);
     setMessages([]);
     setToolTraces([]);
     setLatestReport(null);
@@ -477,19 +579,43 @@ export function AgentPage() {
     setActivityElapsed(0);
   };
 
+  const upsertSessionCard = (sessionId: string, title: string, turnDelta = 0) => {
+    setSessions(prev => {
+      const existing = prev.find(item => item.id === sessionId);
+      const next: SessionCard = {
+        id: sessionId,
+        title: title || existing?.title || "未命名会话",
+        time: "刚刚",
+        turns: Math.max(0, (existing?.turns ?? 0) + turnDelta),
+        latestHasAnswer: turnDelta > 0 ? true : (existing?.latestHasAnswer ?? false),
+        latestQuestion: existing?.latestQuestion ?? null,
+      };
+      return [next, ...prev.filter(item => item.id !== sessionId)];
+    });
+  };
+
   const openSession = async (sessionId: string) => {
-    setActiveSession(sessionId);
-    const detail = await api.getAgentSession(sessionId);
-    const sessionMessages = messagesFromSession(detail);
-    setMessages(sessionMessages);
-    const lastAssistant = [...sessionMessages].reverse().find(item => item.role === "assistant");
-    if (lastAssistant) {
-      selectActivity(lastAssistant);
-    } else {
-      setToolTraces([]);
-      setLatestReport(null);
-      setExecutionSummary("");
-      setActivityElapsed(0);
+    try {
+      setOpeningSession(true);
+      setActiveSession(sessionId);
+      const detail = await api.getAgentSession(sessionId);
+      const sessionMessages = messagesFromSession(detail);
+      setMessages(sessionMessages);
+      const lastAssistant = [...sessionMessages].reverse().find(item => item.role === "assistant");
+      if (lastAssistant) {
+        selectActivity(lastAssistant);
+      } else {
+        setToolTraces([]);
+        setLatestReport(null);
+        setExecutionSummary("");
+        setActivityElapsed(0);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "会话读取失败";
+      toast.error(message);
+      clearConversation(sessionId);
+    } finally {
+      setOpeningSession(false);
     }
   };
 
@@ -499,12 +625,28 @@ export function AgentPage() {
       const result = await api.getAgentSessions(50);
       const items = result.items.map(toSessionCard);
       setSessions(items);
-      resetComposer();
+      if (activeSession && !items.some(item => item.id === activeSession)) {
+        clearConversation();
+      }
+
+      const storedSessionId =
+        typeof window !== "undefined" ? window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY) : null;
+      const latestAnsweredSessionId = items.find(item => item.latestHasAnswer)?.id ?? null;
+      const preferredSessionId =
+        (activeSession && items.some(item => item.id === activeSession) && activeSession)
+        || latestAnsweredSessionId
+        || (storedSessionId && items.some(item => item.id === storedSessionId) && storedSessionId)
+        || items[0]?.id
+        || null;
+
+      if (preferredSessionId) {
+        await openSession(preferredSessionId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "会话加载失败";
       toast.error(message);
       setSessions([]);
-      resetComposer();
+      clearConversation();
     } finally {
       setLoadingSessions(false);
     }
@@ -514,9 +656,96 @@ export function AgentPage() {
     void loadSessions();
   }, []);
 
-  const sendMessage = async () => {
-    const question = input.trim();
+  const createSession = async () => {
+    if (sending) return;
+    try {
+      const session = await api.createAgentSession();
+      upsertSessionCard(session.session_id, session.title, 0);
+      clearConversation(session.session_id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "会话创建失败";
+      toast.error(message);
+    }
+  };
+
+  const copyMessage = async (message: Message) => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      toast.success("回答已复制");
+    } catch {
+      toast.error("复制失败，请检查浏览器权限");
+    }
+  };
+
+  const toggleSpeech = (message: Message) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      toast.error("当前浏览器不支持朗读");
+      return;
+    }
+    if (speechState.speaking && speechState.messageId === message.id) {
+      window.speechSynthesis.cancel();
+      setSpeechState({ messageId: null, speaking: false });
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(message.content.replace(/\*\*/g, ""));
+    utterance.lang = "zh-CN";
+    utterance.onend = () => setSpeechState({ messageId: null, speaking: false });
+    utterance.onerror = () => setSpeechState({ messageId: null, speaking: false });
+    setSpeechState({ messageId: message.id, speaking: true });
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const findUserQuestionForAssistant = (message: Message) => {
+    if (!message.turnId) return null;
+    const index = messages.findIndex(item => item.id === message.id);
+    if (index <= 0) return null;
+    for (let pointer = index - 1; pointer >= 0; pointer -= 1) {
+      const item = messages[pointer];
+      if (item.role === "user" && item.turnId === message.turnId) {
+        return item.content;
+      }
+    }
+    return null;
+  };
+
+  const renameSession = async (session: SessionCard) => {
+    const nextTitle = window.prompt("输入新的会话名称", session.title);
+    if (!nextTitle) return;
+    const trimmed = nextTitle.trim();
+    if (!trimmed || trimmed === session.title) return;
+    try {
+      const updated = await api.renameAgentSession(session.id, trimmed);
+      upsertSessionCard(updated.session_id, updated.title, 0);
+      if (activeSession === session.id) {
+        setActiveSession(updated.session_id);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "会话重命名失败";
+      toast.error(message);
+    }
+  };
+
+  const deleteSession = async (session: SessionCard) => {
+    const confirmed = window.confirm(`确认删除会话“${session.title}”吗？该会话下的问答和报告记录会一起移除。`);
+    if (!confirmed) return;
+    try {
+      await api.deleteAgentSession(session.id);
+      setSessions(prev => prev.filter(item => item.id !== session.id));
+      if (activeSession === session.id) {
+        clearConversation();
+      }
+      toast.success("会话已删除");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "会话删除失败";
+      toast.error(message);
+    }
+  };
+
+  const sendMessage = async (overrideQuestion?: string) => {
+    const question = (overrideQuestion ?? input).trim();
     if (!question || sending) return;
+    const assistantMessageId = `assistant-${Date.now()}`;
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -525,124 +754,215 @@ export function AgentPage() {
       timestamp: "刚刚",
     };
 
-    setMessages(prev => [...prev, userMessage]);
-    setInput("");
+    setMessages(prev => [
+      ...prev,
+      userMessage,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "正在生成...",
+        timestamp: "刚刚",
+      },
+    ]);
+    if (!overrideQuestion) {
+      setInput("");
+    }
     setSending(true);
     setToolTraces([]);
     setLatestReport(null);
     setExecutionSummary("");
+    setActivityOpen(true);
     const startedAt = Date.now();
 
     try {
-      const result = await api.chatAgent(activeSession ? { session_id: activeSession, question } : { question });
-      const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-      const assistantMessage: Message = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: result.answer,
-        timestamp: "刚刚",
-        turnId: result.turn_id,
-        toolTraces: result.tool_calls.map(toToolTrace),
-        report: result.report ?? null,
-        executionSummary: result.thinking,
-        runtimeText: formatDuration(elapsed),
-        elapsedSeconds: elapsed,
-        model: result.model,
-      };
+      let currentSessionTitle = activeSessionCard?.title || question.slice(0, 20) || "新的市场问数";
 
-      setMessages(prev => [...prev, assistantMessage]);
-      setActiveSession(result.session_id);
-      setToolTraces(assistantMessage.toolTraces ?? []);
-      setLatestReport(assistantMessage.report ?? null);
-      setExecutionSummary(result.thinking ?? "");
-      setActivityElapsed(elapsed);
-      setSessions(prev => {
-        const next: SessionCard = {
-          id: result.session_id,
-          title: question.slice(0, 20),
-          time: "刚刚",
-          turns: (prev.find(item => item.id === result.session_id)?.turns ?? 0) + 1,
-        };
-        return [next, ...prev.filter(item => item.id !== result.session_id)];
-      });
+      await api.streamAgentChat(
+        activeSession ? { session_id: activeSession, question } : { question },
+        {
+          onSession: event => {
+            currentSessionTitle = event.title || currentSessionTitle;
+            setActiveSession(event.session_id);
+            upsertSessionCard(event.session_id, currentSessionTitle, 0);
+          },
+          onToolCall: call => {
+            setToolTraces(prev => [...prev, toToolTrace(call)]);
+            setActivityOpen(true);
+          },
+          onDelta: chunk => {
+            setMessages(prev => prev.map(item => (
+              item.id === assistantMessageId
+                ? {
+                    ...item,
+                    content: item.content === "正在生成..." ? chunk : `${item.content}${chunk}`,
+                  }
+                : item
+            )));
+          },
+          onReplace: content => {
+            setMessages(prev => prev.map(item => (
+              item.id === assistantMessageId ? { ...item, content } : item
+            )));
+          },
+          onDone: result => {
+            const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+            const finalMessage = result.turn ? assistantMessageFromTurn(result.turn) : {
+              id: assistantMessageId,
+              role: "assistant" as const,
+              content: result.answer,
+              timestamp: "刚刚",
+              turnId: result.turn_id,
+              toolTraces: result.tool_calls.map(toToolTrace),
+              report: result.report ?? null,
+              executionSummary: result.thinking,
+              runtimeText: formatDuration(elapsed),
+              elapsedSeconds: elapsed,
+              model: result.model,
+            };
+            setMessages(prev => prev.map(item => (
+              item.id === assistantMessageId
+                ? { ...finalMessage, id: assistantMessageId }
+                : item
+            )));
+            setActiveSession(result.session_id);
+            setToolTraces(finalMessage.toolTraces ?? []);
+            setLatestReport(finalMessage.report ?? null);
+            setExecutionSummary(result.thinking ?? "");
+            setActivityElapsed(finalMessage.elapsedSeconds ?? elapsed);
+            upsertSessionCard(result.session_id, currentSessionTitle, 1);
+          },
+          onError: error => {
+            const payload = error.data as {
+              session_id?: string;
+              tool_calls?: AgentToolCall[];
+              report?: GeneratedReport | null;
+              execution?: string;
+            } | undefined;
+            if (payload?.session_id) {
+              setActiveSession(payload.session_id);
+              upsertSessionCard(payload.session_id, currentSessionTitle, 0);
+            }
+            if (Array.isArray(payload?.tool_calls)) {
+              setToolTraces(payload.tool_calls.map(toToolTrace));
+            }
+            if (payload?.report) {
+              setLatestReport(payload.report);
+            }
+            if (payload?.execution) {
+              setExecutionSummary(payload.execution);
+            }
+            setActivityElapsed(Math.max(1, Math.round((Date.now() - startedAt) / 1000)));
+          },
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "问答请求失败";
-      const payload = (error as Error & { data?: any }).data;
-      if (payload?.session_id) {
-        setActiveSession(payload.session_id);
-      }
-      if (Array.isArray(payload?.tool_calls)) {
-        setToolTraces(payload.tool_calls.map(toToolTrace));
-      }
-      if (payload?.report) {
-        setLatestReport(payload.report);
-      }
-      if (payload?.execution) {
-        setExecutionSummary(payload.execution);
-      }
-      setActivityElapsed(Math.max(1, Math.round((Date.now() - startedAt) / 1000)));
+      setMessages(prev => prev.map(item => (
+        item.id === assistantMessageId
+          ? {
+              ...item,
+              content: "本轮回答未完成，请查看右侧工具调用与证据记录。",
+            }
+          : item
+      )));
       toast.error(message);
     } finally {
       setSending(false);
     }
   };
 
+  const replayMessage = async (message: Message) => {
+    const question = findUserQuestionForAssistant(message);
+    if (!question) {
+      toast.error("未找到对应提问，无法重新生成");
+      return;
+    }
+    await sendMessage(question);
+  };
+
   return (
-    <div className="flex gap-4" style={{ height: "calc(100vh - 130px)" }}>
+    <div className="flex flex-col gap-4 lg:flex-row" style={{ height: "calc(100vh - 130px)", minHeight: 0 }}>
       <div
-        className="w-56 flex-shrink-0 rounded-xl overflow-hidden"
+        className="h-32 w-full flex-shrink-0 overflow-hidden rounded-xl lg:h-auto lg:w-56"
         style={{ border: "1px solid #E5EAF2", background: "#fff" }}
       >
         <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid #E5EAF2" }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: "#1F2937" }}>会话</span>
           <button
             type="button"
-            onClick={resetComposer}
+            onClick={() => void createSession()}
+            disabled={sending}
+            className="inline-flex items-center gap-1"
             style={{ fontSize: 12, color: "#163A70" }}
           >
+            <Plus size={12} />
             新建
           </button>
         </div>
         <div className="overflow-auto" style={{ maxHeight: "100%" }}>
           <div className="p-2 flex flex-col gap-1.5">
             {loadingSessions && (
-              <div style={{ fontSize: 12, color: "#9CA3AF", padding: 12 }}>正在读取会话...</div>
+              <div style={{ fontSize: 12, color: "#9CA3AF", padding: 12 }}>正在加载会话记录...</div>
             )}
             {!loadingSessions && sessions.length === 0 && (
               <div style={{ fontSize: 12, color: "#9CA3AF", padding: 12 }}>暂无历史会话</div>
             )}
             {sessions.map(session => (
-              <button
+              <div
                 key={session.id}
-                type="button"
-                onClick={() => void openSession(session.id)}
-                className="text-left rounded-lg px-3 py-2.5"
+                className="rounded-lg px-3 py-2.5"
                 style={{
                   background: activeSession === session.id ? "#EFF6FF" : "transparent",
                   border: activeSession === session.id ? "1px solid #BFDBFE" : "1px solid transparent",
                 }}
               >
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: activeSession === session.id ? "#163A70" : "#374151",
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {session.title}
+                <div className="flex items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void openSession(session.id)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: activeSession === session.id ? "#163A70" : "#374151",
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      {session.title}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4 }}>
+                      {session.time} · {session.turns} 轮
+                    </div>
+                  </button>
+                  <div className="flex items-center gap-1 pt-0.5">
+                    <button
+                      type="button"
+                      title="重命名会话"
+                      onClick={() => void renameSession(session)}
+                      style={{ color: "#9CA3AF" }}
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      title="删除会话"
+                      onClick={() => void deleteSession(session)}
+                      style={{ color: "#9CA3AF" }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4 }}>
-                  {session.time} · {session.turns} 轮
-                </div>
-              </button>
+              </div>
             ))}
           </div>
         </div>
       </div>
 
       <div
-        className="flex flex-1 min-w-0 rounded-xl overflow-hidden"
+        className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl"
         style={{ border: "1px solid #E5EAF2", background: "#FAFBFC" }}
       >
         <div className="flex-1 min-w-0 flex flex-col">
@@ -653,8 +973,11 @@ export function AgentPage() {
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full" style={{ background: "#EFF6FF" }}>
                 <Sparkles size={12} style={{ color: "#163A70" }} />
-                <span style={{ fontSize: 12, color: "#163A70" }}>真实问答</span>
+                <span style={{ fontSize: 12, color: "#163A70" }}>实时问答</span>
               </div>
+              <span style={{ fontSize: 12, color: "#4B5563" }}>
+                {activeSessionCard?.title || "未命名会话"}
+              </span>
               {activeSession && <span style={{ fontSize: 11, color: "#9CA3AF" }}>{activeSession}</span>}
             </div>
             <button
@@ -673,16 +996,26 @@ export function AgentPage() {
             </button>
           </div>
 
-          <div className="flex-1 overflow-auto px-6 py-5">
+          <div ref={scrollContainerRef} className="flex-1 overflow-auto px-6 py-5" style={{ minHeight: 0 }}>
             <div className="max-w-3xl mx-auto flex flex-col gap-5">
-              {messages.length === 0 && !sending && (
+              {openingSession && (
                 <div
                   className="rounded-2xl p-6"
                   style={{ background: "#fff", border: "1px solid #E5EAF2", textAlign: "center" }}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#163A70" }}>直接提问</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#163A70" }}>正在读取会话</div>
+                  <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8 }}>正在加载历史问答与工具调用证据。</div>
+                </div>
+              )}
+
+              {!openingSession && messages.length === 0 && !sending && (
+                <div
+                  className="rounded-2xl p-6"
+                  style={{ background: "#fff", border: "1px solid #E5EAF2", textAlign: "center" }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#163A70" }}>智能问数</div>
                   <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8, lineHeight: 1.8 }}>
-                    发送问题开始新会话。
+                    数值结论必须来自白名单工具证据；如果数值证据不足，系统只保留定性结论并明确说明。
                   </div>
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
                     {QUICK_QUESTIONS.map(question => (
@@ -701,15 +1034,22 @@ export function AgentPage() {
               )}
 
               {messages.map(message => (
-                <MessageBubble key={message.id} message={message} onSelect={selectActivity} />
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onSelect={selectActivity}
+                  onCopy={copyMessage}
+                  onReplay={replayMessage}
+                  onToggleSpeech={toggleSpeech}
+                  speaking={speechState.speaking && speechState.messageId === message.id}
+                />
               ))}
 
-              {sending && <ThinkingBubble elapsed={sendingElapsed} />}
               <div ref={bottomRef} />
             </div>
           </div>
 
-          <div className="px-6 py-4">
+          <div className="px-6 py-4" style={{ borderTop: "1px solid #E5EAF2", background: "rgba(250,251,252,0.96)" }}>
             <div
               className="max-w-3xl mx-auto flex items-center gap-2 rounded-2xl px-4 py-2"
               style={{ background: "#fff", border: "1px solid #E5EAF2", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}

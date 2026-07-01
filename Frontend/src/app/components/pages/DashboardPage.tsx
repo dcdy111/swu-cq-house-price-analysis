@@ -21,7 +21,12 @@ import { PriceTrendLine } from "../charts/PriceTrendLine";
 import { AreaPriceScatter } from "../charts/AreaPriceScatter";
 import { LayoutDonut } from "../charts/LayoutDonut";
 import { PriceDistributionBar } from "../charts/PriceDistributionBar";
-import { ChongqingHeatMap, ChongqingMapMetric, District } from "../charts/ChongqingHeatMap";
+import {
+  ChongqingHeatMap,
+  ChongqingMapBackend,
+  ChongqingMapMetric,
+  District,
+} from "../charts/ChongqingHeatMap";
 import {
   api,
   AreaPricePoint,
@@ -42,6 +47,10 @@ const MAP_METRICS: { key: ChongqingMapMetric; label: string }[] = [
   { key: "quality", label: "质量" },
 ];
 
+// 优先读取注入的 Vite 环境变量；不写入 .env.local 时默认关闭高德地图，回退到本地 GeoJSON。
+const AMAP_KEY = (import.meta as any).env?.VITE_AMAP_WEB_KEY as string | undefined;
+const MAP_BACKEND: "amap" | "geojson" = AMAP_KEY ? "amap" : "geojson";
+
 const numberFormatter = new Intl.NumberFormat("zh-CN");
 
 function fmt(value?: number | null, digits = 0) {
@@ -54,10 +63,38 @@ function sourceLabel(source: string) {
     fang: "房天下",
     anjuke_mobile: "安居客",
     lianjia: "链家",
-    anjuke_legacy: "安居客旧库",
-    lianjia_legacy: "链家旧库",
   };
   return labels[source] ?? source;
+}
+
+function schedulerDistrictLabel(value?: string | null) {
+  const text = String(value || "").trim();
+  if (!text || text === "全部" || text.toLowerCase() === "all") return "全区县";
+  return text.split(",").map(item => item.trim()).filter(Boolean).join("、");
+}
+
+function crawlDistrictName(name: string) {
+  const text = String(name || "").trim();
+  const aliases: Record<string, string> = {
+    yubei: "渝北",
+    yuzhong: "渝中",
+    jiangbei: "江北",
+    shapingba: "沙坪坝",
+    jiulongpo: "九龙坡",
+    nanan: "南岸",
+    nanana: "南岸",
+    banan: "巴南",
+    beibei: "北碚",
+    dadukou: "大渡口",
+    dianjiangxian: "垫江",
+    dainjiangxian: "垫江",
+    wansheng: "万盛",
+    万盛经开区: "万盛",
+  };
+  const mapped = aliases[text.toLowerCase()] ?? aliases[text] ?? text;
+  if (mapped === "两江新区" || mapped === "忠县") return mapped;
+  if (mapped.endsWith("自治县")) return mapped.replace(/土家族苗族自治县|苗族土家族自治县|土家族自治县/g, "");
+  return mapped.replace(/区$/g, "").replace(/县$/g, "");
 }
 
 function statusLabel(status: string) {
@@ -84,9 +121,16 @@ function mapDistricts(items: DistrictMapItem[]): DashboardDistrict[] {
   }));
 }
 
+function formatTime(value?: string | null) {
+  if (!value) return "暂无更新";
+  const text = String(value);
+  return text.length > 16 ? text.slice(0, 16) : text;
+}
+
 export function DashboardPage() {
   const navigate = useNavigate();
   const [mapMetric, setMapMetric] = useState<ChongqingMapMetric>("avgPrice");
+  const [mapBackend, setMapBackend] = useState<ChongqingMapBackend>(MAP_BACKEND);
   const [selectedDistrict, setSelectedDistrict] = useState<DashboardDistrict | null>(null);
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [districtPrice, setDistrictPrice] = useState<DistrictPriceItem[]>([]);
@@ -123,12 +167,13 @@ export function DashboardPage() {
         setPriceDistribution(distribution.items);
         setSettings(settingsData);
         setError(null);
+        // 默认不再自动选中城口；用户首次没有主动选择区县时保持“未选中”。
         setSelectedDistrict(prev => {
           if (!prev) return null;
           return districts.find(item => item.name === prev.name) ?? null;
         });
       })
-      .catch(err => {
+      .catch(loadError => {
         setOverview(null);
         setDistrictPrice([]);
         setMapData([]);
@@ -138,7 +183,7 @@ export function DashboardPage() {
         setPriceDistribution([]);
         setSettings(null);
         setSelectedDistrict(null);
-        setError(err instanceof Error ? err.message : "Dashboard 数据加载失败");
+        setError(loadError instanceof Error ? loadError.message : "Dashboard 数据加载失败");
       })
       .finally(() => setLoading(false));
   };
@@ -148,7 +193,7 @@ export function DashboardPage() {
   }, []);
 
   const kpis = overview?.kpis;
-  const latestDate = kpis?.latest_updated_at ?? "暂无";
+  const latestDate = formatTime(kpis?.latest_updated_at);
 
   const kpiData = useMemo(
     () => [
@@ -220,35 +265,34 @@ export function DashboardPage() {
 
   const prefillCrawlDistrict = (district: DashboardDistrict) => {
     const raw = district.rawDistricts?.[0] ?? district.name;
-    sessionStorage.setItem("crawlPrefillDistrict", raw.replace(/[区县]$/g, ""));
+    sessionStorage.setItem("crawlPrefillDistrict", crawlDistrictName(raw));
     navigate("/crawl");
   };
 
   const crawlItems = overview?.crawl_status.items ?? [];
   const sourceSummary = overview?.source_summary ?? [];
   const scheduler = settings?.scheduler;
+  const trendGranularity = trendData[0]?.granularity ?? "month";
+  const schedulerSource = sourceLabel(scheduler?.incremental_crawl_source || "fang");
+  const schedulerDistricts = schedulerDistrictLabel(scheduler?.incremental_crawl_districts);
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 style={{ fontSize: 20, fontWeight: 700, color: "#163A70" }}>
-            首页总览
-          </h2>
-          <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 4 }}>
-            更新时间：{latestDate}
-          </p>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "#163A70" }}>首页总览</h2>
+          <p style={{ color: "#9CA3AF", fontSize: 13, marginTop: 4 }}>更新时间：{latestDate}</p>
         </div>
         <div className="flex items-center gap-3">
-          <StatusTag 
-            status={loading ? "running" : error ? "danger" : "success"} 
-            label={loading ? "加载中" : error ? "异常" : "已连接"} 
+          <StatusTag
+            status={loading ? "running" : error ? "danger" : "success"}
+            label={loading ? "加载中" : error ? "异常" : "已连接"}
           />
-          <Button 
-            variant="outline" 
-            size="sm" 
-            onClick={loadDashboard} 
-            disabled={loading} 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadDashboard}
+            disabled={loading}
             style={{ fontSize: 12, height: 34 }}
           >
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
@@ -258,39 +302,43 @@ export function DashboardPage() {
       </div>
 
       {error && (
-        <div 
-          className="rounded-lg px-4 py-3 fade-in-up"
-          style={{ 
-            background: "#FEF2F2", 
-            border: "1px solid #FECACA", 
-            color: "#DC2626", 
-            fontSize: 13 
+        <div
+          className="rounded-lg px-4 py-3"
+          style={{
+            background: "#FEF2F2",
+            border: "1px solid #FECACA",
+            color: "#DC2626",
+            fontSize: 13,
           }}
         >
           首页数据加载失败：{error}
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7">
         {kpiData.map(kpi => (
           <KpiCard key={kpi.title} {...kpi} />
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <SectionCard
-          title="重庆区县分布"
-          className="lg:col-span-2"
-          action={
-            <div 
-              className="flex rounded-lg p-1"
+      <SectionCard
+        title="重庆区县分布"
+        subtitle={
+          mapBackend === "amap"
+            ? "底图：高德 JS API · 色彩：挂牌均价 / 样本量 / 质量"
+            : "底图：本地 GeoJSON · 色彩：挂牌均价 / 样本量 / 质量"
+        }
+        action={
+          <div className="flex w-full justify-start sm:w-auto sm:justify-end">
+            <div
+              className="grid w-full grid-cols-3 rounded-lg p-1 sm:w-auto sm:flex"
               style={{ background: "#F3F4F6", border: "1px solid #E5EAF2" }}
             >
               {MAP_METRICS.map(item => (
                 <button
                   key={item.key}
                   onClick={() => setMapMetric(item.key)}
-                  className="px-2.5 py-1 rounded-md transition-all duration-200"
+                  className="rounded-md px-2 py-1.5 transition-all duration-200"
                   style={{
                     fontSize: 12,
                     color: mapMetric === item.key ? "#fff" : "#6B7280",
@@ -301,175 +349,264 @@ export function DashboardPage() {
                 </button>
               ))}
             </div>
-          }
-        >
-            <ChongqingHeatMap
-              metric={mapMetric}
-              data={mapData}
-              height={340}
-              selectedDistrict={selectedDistrict?.name}
-              onSelectDistrict={district => setSelectedDistrict(district as DashboardDistrict | null)}
-            />
-            <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
-              {[
-              ["选中区县", selectedDistrict?.name ?? "未选中"],
-              ["挂牌均价", selectedDistrict ? `${fmt(selectedDistrict.avgPrice)} 元/㎡` : `${fmt(kpis?.avg_unit_price)} 元/㎡`],
-              ["采集样本", selectedDistrict ? `${fmt(selectedDistrict.count)} 套` : `${fmt(kpis?.total_count)} 套`],
-              ["质量分", selectedDistrict ? `${fmt(selectedDistrict.quality, 1)} 分` : `${fmt(kpis?.avg_quality, 1)} 分`],
-            ].map(([label, value]) => (
-              <div 
-                key={label} 
-                className="rounded-lg px-3 py-2"
-                style={{ 
-                  background: "#F8FAFC", 
-                  border: "1px solid #E5EAF2"
-                }}
-              >
-                <div style={{ fontSize: 11, color: "#6B7280" }}>{label}</div>
-                <div style={{ fontSize: 13, color: "#1F2937", fontWeight: 600, marginTop: 2 }}>{value}</div>
+          </div>
+        }
+      >
+        <ChongqingHeatMap
+          metric={mapMetric}
+          data={mapData}
+          height={460}
+          selectedDistrict={selectedDistrict?.name}
+          onSelectDistrict={district => setSelectedDistrict((district as DashboardDistrict) ?? null)}
+          onBackendChange={setMapBackend}
+        />
+        {mapBackend === "geojson" && (
+          <div
+            className="mt-2"
+            style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.6 }}
+          >
+            {AMAP_KEY
+              ? "高德底图未成功加载，当前已自动回退到本地 GeoJSON 区县边界。"
+              : "如需使用高德 JS API，在 Frontend/.env.local 配置 VITE_AMAP_WEB_KEY 后重启前端。"}
+          </div>
+        )}
+        <div className="mt-4 grid grid-cols-2 xl:grid-cols-4 gap-3">
+          {[
+            ["选中区县", selectedDistrict?.name ?? "未选中"],
+            [
+              "挂牌均价",
+              selectedDistrict ? `${fmt(selectedDistrict.avgPrice)} 元/㎡` : `${fmt(kpis?.avg_unit_price)} 元/㎡`,
+            ],
+            [
+              "采集样本",
+              selectedDistrict ? `${fmt(selectedDistrict.count)} 套` : `${fmt(kpis?.total_count)} 套`,
+            ],
+            [
+              "质量分",
+              selectedDistrict
+                ? `${fmt(selectedDistrict.quality, 1)} 分`
+                : `${fmt(kpis?.avg_quality, 1)} 分`,
+            ],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="rounded-lg px-3 py-3"
+              style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
+            >
+              <div style={{ fontSize: 11, color: "#6B7280" }}>{label}</div>
+              <div style={{ fontSize: 14, color: "#1F2937", fontWeight: 600, marginTop: 4 }}>
+                {value}
               </div>
-            ))}
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              style={{ 
-                background: "#163A70", 
-                border: "1px solid #163A70", 
-                fontSize: 12, 
-                height: 32,
-                color: "#fff"
-              }}
-              disabled={!selectedDistrict}
-              onClick={() => selectedDistrict && focusListingSearch(selectedDistrict)}
-            >
-              <Search size={13} className="mr-1.5" />查看房源
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              style={{ fontSize: 12, height: 32, borderColor: "#E5EAF2" }}
-              disabled={!selectedDistrict}
-              onClick={() => selectedDistrict && prefillCrawlDistrict(selectedDistrict)}
-            >
-              <Radio size={13} className="mr-1.5" />按区补采
-            </Button>
-            <Button 
-              size="sm" 
-              variant="ghost" 
-              style={{ fontSize: 12, height: 32, color: "#6B7280" }} 
-              onClick={() => setSelectedDistrict(null)}
-            >
-              重置
-            </Button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            style={{
+              background: "#163A70",
+              border: "1px solid #163A70",
+              fontSize: 12,
+              height: 32,
+              color: "#fff",
+            }}
+            disabled={!selectedDistrict}
+            onClick={() => selectedDistrict && focusListingSearch(selectedDistrict)}
+          >
+            <Search size={13} className="mr-1.5" />
+            查看房源
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            style={{ fontSize: 12, height: 32, borderColor: "#E5EAF2" }}
+            disabled={!selectedDistrict}
+            onClick={() => selectedDistrict && prefillCrawlDistrict(selectedDistrict)}
+          >
+            <Radio size={13} className="mr-1.5" />
+            按区补采
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            style={{ fontSize: 12, height: 32, color: "#6B7280" }}
+            onClick={() => setSelectedDistrict(null)}
+          >
+            清除选中
+          </Button>
+        </div>
+      </SectionCard>
+
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-5">
+        <SectionCard
+          title="区县均价"
+          subtitle={`共 ${districtPrice.length} 个区县，按挂牌均价降序`}
+          noPad
+          className="xl:col-span-1"
+        >
+          <div className="p-2">
+            <DistrictRankBar data={districtPrice} />
           </div>
         </SectionCard>
 
-        <SectionCard title="区县均价">
-          <DistrictRankBar data={districtPrice} />
-        </SectionCard>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2">
-          <SectionCard title="挂牌价趋势">
+        <div className="xl:col-span-3">
+          <SectionCard
+            title="挂牌价趋势"
+          subtitle={`粒度：${trendGranularity === "hour" ? "小时" : trendGranularity === "day" ? "日" : "月"}`}
+          >
             <PriceTrendLine data={trendData} />
           </SectionCard>
         </div>
-        <SectionCard title="总价分布">
-          <PriceDistributionBar data={priceDistribution} />
-        </SectionCard>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2">
-          <SectionCard title="面积-单价">
-            <AreaPriceScatter data={scatterData} />
-          </SectionCard>
-        </div>
-        <SectionCard title="户型分布">
+      <SectionCard title="面积-单价散点">
+        <AreaPriceScatter data={scatterData} />
+      </SectionCard>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <SectionCard title="总价分布" subtitle="按挂牌总价区间统计">
+          <PriceDistributionBar data={priceDistribution} />
+        </SectionCard>
+        <SectionCard title="户型分布" subtitle="展示主要户型占比与样本量">
           <LayoutDonut data={layoutData} />
         </SectionCard>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <SectionCard title="采集任务">
-          <div className="flex flex-col gap-2.5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5 items-stretch">
+        <SectionCard
+          title="最近任务"
+          subtitle={`展示 ${crawlItems.length} 条 · 完整记录在“采集任务”页`}
+          noPad
+        >
+          <div className="flex flex-col">
             {crawlItems.length === 0 && (
-              <div style={{ color: "#9CA3AF", fontSize: 12 }}>暂无任务</div>
+              <div
+                style={{
+                  color: "#9CA3AF",
+                  fontSize: 12,
+                  padding: 20,
+                }}
+              >
+                暂无任务
+              </div>
             )}
             {crawlItems.map(task => (
               <div
                 key={task.id}
-                className="rounded-lg px-3 py-2"
-                style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
+                className="flex items-center justify-between gap-2 px-4 py-3"
+                style={{ borderTop: "1px solid #E5EAF2" }}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{task.name}</span>
-                  <StatusTag status={task.status} label={statusLabel(task.status)} />
+                <div className="min-w-0">
+                  <div
+                    className="truncate"
+                    style={{ fontSize: 13, color: "#1F2937", fontWeight: 600 }}
+                  >
+                  系统ID {task.id} · {task.name}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>
+                    {sourceLabel(task.source)} · 解析 {fmt(task.total_found)} 条 · 失败页 {task.failed_pages}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>
-                  {sourceLabel(task.source)} · 解析 {fmt(task.total_found)} 条 · 失败页 {task.failed_pages} · {task.progress}%
+                <div className="flex flex-col items-end gap-1">
+                  <StatusTag status={task.status} label={statusLabel(task.status)} />
+                  <span style={{ fontSize: 11, color: "#9CA3AF" }}>{task.progress}%</span>
                 </div>
               </div>
             ))}
-            <Button
-              size="sm"
-              variant="outline"
-              style={{ fontSize: 12, borderColor: "#E5EAF2" }}
-              onClick={() => navigate("/crawl")}
-            >
-              查看任务页
-            </Button>
+            <div className="px-4 py-3" style={{ borderTop: "1px solid #E5EAF2" }}>
+              <Button
+                size="sm"
+                variant="outline"
+                style={{ fontSize: 12, borderColor: "#E5EAF2" }}
+                onClick={() => navigate("/crawl")}
+              >
+                打开任务页
+              </Button>
+            </div>
           </div>
         </SectionCard>
 
-        <SectionCard title="数据来源">
-          <div className="flex flex-col gap-2.5">
+        <SectionCard title="数据来源" subtitle="按 MySQL listings.source 聚合，仅展示 3 个真实来源" noPad>
+          <div className="flex flex-col">
+            {sourceSummary.length === 0 && (
+              <div style={{ color: "#9CA3AF", fontSize: 12, padding: 20 }}>暂无来源数据</div>
+            )}
             {sourceSummary.map(item => (
               <div
                 key={item.source}
-                className="rounded-lg px-3 py-2"
-                style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
+                className="flex items-center justify-between gap-2 px-4 py-3"
+                style={{ borderTop: "1px solid #E5EAF2" }}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{sourceLabel(item.source)}</span>
-                  <span style={{ fontSize: 12, color: "#163A70" }}>{fmt(item.listing_count)} 条</span>
+                <div>
+                  <div style={{ fontSize: 13, color: "#1F2937", fontWeight: 600 }}>
+                    {sourceLabel(item.source)}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>
+                    均价 {fmt(item.avg_unit_price)} 元/㎡ · 质量 {fmt(item.avg_quality, 1)} 分
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>
-                  均价 {fmt(item.avg_unit_price)} 元/㎡ · 质量 {fmt(item.avg_quality, 1)} 分
-                </div>
+                <span style={{ fontSize: 13, color: "#163A70", fontWeight: 700 }}>
+                  {fmt(item.listing_count)} 条
+                </span>
               </div>
             ))}
           </div>
         </SectionCard>
 
-        <SectionCard title="定时任务">
-          <div className="flex flex-col gap-2.5">
+        <SectionCard title="每日增量采集调度" subtitle="自动补采状态" noPad>
+          <div className="flex flex-col">
             {[
-              ["全局调度", scheduler?.enabled, scheduler?.timezone ?? "-"],
-              ["定时采集", scheduler?.incremental_crawl_job_enabled, `${scheduler?.incremental_crawl_interval_hours ?? "-"} 小时`],
-              ["定时质检", scheduler?.quality_report_job_enabled, `${scheduler?.quality_report_interval_hours ?? "-"} 小时`],
+              [
+                "APScheduler 总开关",
+                scheduler?.enabled,
+                `控制后台定时器是否运行 · 时区 ${scheduler?.timezone ?? "-"}`,
+              ],
+              [
+                "增量采集定时任务",
+                scheduler?.incremental_crawl_job_enabled,
+                `${schedulerSource} · ${schedulerDistricts} · 每 ${scheduler?.incremental_crawl_interval_hours ?? 24}h · 每区 ${scheduler?.incremental_crawl_max_pages ?? 1} 页 · 并发 ${scheduler?.incremental_crawl_max_workers ?? 3}`,
+              ],
+              [
+                "质量报告定时任务",
+                scheduler?.quality_report_job_enabled,
+                `${scheduler?.quality_report_interval_hours ?? "-"}h`,
+              ],
             ].map(([label, enabled, extra]) => (
               <div
                 key={String(label)}
-                className="rounded-lg px-3 py-2 flex items-center justify-between gap-3"
-                style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
+                className="flex items-center justify-between gap-3 px-4 py-3"
+                style={{ borderTop: "1px solid #E5EAF2" }}
               >
                 <div>
-                  <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{label}</div>
-                  <div style={{ fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>{extra}</div>
+                  <div style={{ fontSize: 13, color: "#1F2937", fontWeight: 600 }}>{label}</div>
+                  <div style={{ fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>{String(extra)}</div>
                 </div>
-                <StatusTag status={enabled ? "success" : "pending"} label={enabled ? "开启" : "关闭"} />
+                <StatusTag
+                  status={enabled ? "success" : "pending"}
+                  label={enabled ? "开启" : "关闭"}
+                />
               </div>
             ))}
-            <Button
-              size="sm"
-              style={{ background: "#163A70", border: "1px solid #163A70", fontSize: 12, color: "#fff" }}
-              onClick={() => navigate("/settings")}
+            <div
+              className="px-4 py-3"
+              style={{ borderTop: "1px solid #E5EAF2", background: "#F8FAFC", fontSize: 12, color: "#6B7280", lineHeight: 1.7 }}
             >
-              查看设置
-            </Button>
+              默认：房天下 / 全区县 / 24 小时 / 每区 1 页 / 并发 3。
+            </div>
+            <div className="px-4 py-3" style={{ borderTop: "1px solid #E5EAF2" }}>
+              <Button
+                size="sm"
+                style={{
+                  background: "#163A70",
+                  border: "1px solid #163A70",
+                  fontSize: 12,
+                  color: "#fff",
+                }}
+                onClick={() => navigate("/settings")}
+              >
+                进入调度设置
+              </Button>
+            </div>
           </div>
         </SectionCard>
       </div>

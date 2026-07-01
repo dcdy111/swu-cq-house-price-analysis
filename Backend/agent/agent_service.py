@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from uuid import uuid4
+from typing import Generator
 
 from Backend.agent.deepseek_client import DeepSeekClient, DeepSeekInvocationError
 from Backend.agent.tool_registry import ToolRegistry
@@ -11,6 +13,7 @@ from Backend.models.agent import AgentSession, AgentToolCall, AgentTurn, Generat
 
 
 DISTRICT_KEYWORDS = [
+    "两江新区",
     "渝中区",
     "江北区",
     "南岸区",
@@ -46,6 +49,19 @@ DISTRICT_KEYWORDS = [
     "大渡口",
     "巴南",
     "北碚",
+    "荣昌",
+]
+DESTINATION_KEYWORDS = [
+    "西南大学荣昌校区",
+    "荣昌校区",
+    "西南大学",
+    "校园",
+    "学校",
+    "校区",
+    "医院",
+    "商圈",
+    "高铁站",
+    "地铁站",
 ]
 LEGACY_LOCAL_SESSION_PREFIX = "local-"
 
@@ -137,6 +153,109 @@ class AgentService:
             "model": model_name,
             "turn": turn.to_dict(include_tool_calls=True),
         }
+
+    def stream_chat(self, payload: dict) -> Generator[dict, None, None]:
+        question = str(payload.get("question") or payload.get("message") or "").strip()
+        if not question:
+            raise ValueError("question 不能为空")
+
+        requested_session_id = str(payload.get("session_id") or "").strip()
+        session_id = (
+            requested_session_id
+            if requested_session_id and not self._is_legacy_local_session_id(requested_session_id)
+            else f"agent-{uuid4().hex[:10]}"
+        )
+        turn_id = f"turn-{uuid4().hex[:12]}"
+        session = self._ensure_session(session_id, question)
+        turn = AgentTurn(
+            turn_id=turn_id,
+            session_id=session_id,
+            question=question,
+            status="running",
+            created_at=datetime.utcnow(),
+        )
+        db.session.add(turn)
+        db.session.commit()
+
+        plan = self._plan_tools(question, session_id)
+        tool_calls = []
+        evidence: dict[str, dict] = {}
+
+        yield {"type": "session", "session_id": session_id, "turn_id": turn_id, "title": session.title}
+
+        for step in plan:
+            if step["tool"] == "generate_report":
+                step["args"]["evidence"] = evidence
+                step["args"]["content"] = self._compose_report_content(question, evidence)
+            call = self._execute_and_record(session_id=session_id, question=question, tool_name=step["tool"], args=step["args"])
+            tool_calls.append(call)
+            if call["status"] == "success":
+                evidence[self._evidence_key(step["tool"])] = call["tool_result"]
+            yield {"type": "tool_call", "tool_call": call}
+
+        thinking_summary = self._execution_summary(tool_calls)
+        report_id = ((evidence.get("report") or {}).get("report") or {}).get("id")
+        tool_call_ids = [int(item["id"]) for item in tool_calls if item.get("id")]
+
+        try:
+            answer = ""
+            model_name = None
+            for event in DeepSeekClient.stream_answer(question, evidence):
+                if event["type"] == "delta":
+                    answer += event["content"]
+                    model_name = event.get("model")
+                    yield event
+                elif event["type"] == "replace":
+                    answer = event["content"]
+                    model_name = event.get("model")
+                    yield event
+                elif event["type"] == "final":
+                    answer = event["content"]
+                    model_name = event.get("model")
+
+            self._persist_report_runtime(evidence, tool_calls, model_name or "", answer)
+            turn.answer = answer
+            turn.thinking_summary = thinking_summary
+            turn.model_name = model_name
+            turn.status = "success"
+            turn.report_id = int(report_id) if report_id else None
+            turn.finished_at = datetime.utcnow()
+            turn.set_tool_call_ids(tool_call_ids)
+            session.updated_at = turn.finished_at
+            db.session.commit()
+            yield {
+                "type": "done",
+                "data": {
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "answer": answer,
+                    "tool_calls": tool_calls,
+                    "report": evidence.get("report", {}).get("report"),
+                    "thinking": thinking_summary,
+                    "model": model_name,
+                    "turn": turn.to_dict(include_tool_calls=True),
+                },
+            }
+        except DeepSeekInvocationError as exc:
+            turn.answer = None
+            turn.thinking_summary = thinking_summary
+            turn.model_name = None
+            turn.status = "failed"
+            turn.report_id = int(report_id) if report_id else None
+            turn.finished_at = datetime.utcnow()
+            turn.set_tool_call_ids(tool_call_ids)
+            session.updated_at = turn.finished_at
+            db.session.commit()
+            raise AgentChatError(
+                str(exc),
+                {
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "tool_calls": tool_calls,
+                    "report": evidence.get("report", {}).get("report"),
+                    "execution": thinking_summary,
+                },
+            ) from exc
     @staticmethod
     def _ensure_session(session_id: str, question: str) -> AgentSession:
         session = db.session.get(AgentSession, session_id)
@@ -160,6 +279,38 @@ class AgentService:
             .all()
         )
         return {"items": [row.to_dict(include_turns=False) for row in rows]}
+
+    @staticmethod
+    def create_session(title: str | None = None) -> AgentSession:
+        session = AgentSession(
+            session_id=f"agent-{uuid4().hex[:10]}",
+            title=(str(title or "").strip() or "新的市场问数")[:64],
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.session.add(session)
+        db.session.commit()
+        return session
+
+    @staticmethod
+    def rename_session(session_id: str, title: str) -> AgentSession:
+        session = AgentService.get_session(session_id)
+        if session is None:
+            raise ValueError("会话不存在")
+        session.title = (str(title or "").strip() or session.title)[:64]
+        session.updated_at = datetime.utcnow()
+        db.session.commit()
+        return session
+
+    @staticmethod
+    def delete_session(session_id: str) -> None:
+        session = AgentService.get_session(session_id)
+        if session is None:
+            raise ValueError("会话不存在")
+        GeneratedReport.query.filter_by(session_id=session_id).delete()
+        AgentToolCall.query.filter_by(session_id=session_id).delete()
+        db.session.delete(session)
+        db.session.commit()
 
     @staticmethod
     def get_session(session_id: str) -> AgentSession | None:
@@ -278,26 +429,74 @@ class AgentService:
         plan: list[dict] = []
 
         wants_report = "报告" in question or "生成" in question and "市场" in question
+        wants_detail = any(word in question for word in ["详情", "这套", "这条", "房源id", "系统id", "来源房源id", "原始链接"])
+        wants_compare = any(word in question for word in ["对比", "比较", "区别", "差多少", "哪个区县更"])
+        wants_anomaly = any(word in question for word in ["异常", "为什么异常", "为啥异常", "问题房源", "待复核"])
         wants_crawl = any(word in question for word in ["采集", "爬虫", "补采", "任务", "日志", "失败页"])
         wants_model = any(word in question for word in ["模型", "mae", "rmse", "r²", "r2", "特征", "聚类", "异常", "预测"])
         wants_trend = any(word in question for word in ["趋势", "走势", "近12月", "图表", "分布"])
+        wants_mortgage = any(
+            word in question
+            for word in ["贷款", "月供", "首付", "按揭", "还款", "利率", "贷多少", "供多少"]
+        )
+        wants_destination = any(word in question for word in ["附近", "校区", "校园", "通勤", "交通", "路线", "到学校", "到西南大学"])
         wants_recommendation = any(
             word in question
-            for word in ["推荐", "买房", "置业", "性价比", "通勤", "预算", "刚工作", "首套", "适合", "候选"]
+            for word in ["推荐", "买房", "置业", "性价比", "通勤", "预算", "刚工作", "首套", "适合", "候选", "学区"]
         )
+        wants_sql_query = bool(
+            re.search(
+                r"sql|mysql|自然语言查询|数据库(?:里)?查|自定义查询|复杂查询|分组(?:统计|汇总)?|聚合(?:统计|查询)?|中位数|百分位|top\s*\d+|排名前\s*\d+|按.+(?:统计|汇总)",
+                normalized,
+            )
+        )
+        if wants_sql_query:
+            plan.append({"tool": "query_readonly_sql", "args": {"question": question}})
         if wants_crawl:
             plan.append({"tool": "get_crawl_status", "args": {"limit": 10}})
 
         if wants_trend:
             plan.append({"tool": "get_chart_series", "args": {"chart_type": "price_trend", "months": 12}})
 
+        if wants_detail:
+            plan.append({"tool": "get_listing_detail", "args": self._extract_listing_detail_args(question, district)})
+
+        if wants_compare:
+            comparison = self._extract_district_comparison_args(question, district)
+            if comparison:
+                plan.append({"tool": "compare_districts", "args": comparison})
+
+        if wants_anomaly:
+            anomaly_args = self._extract_anomaly_args(question)
+            if anomaly_args:
+                plan.append({"tool": "explain_listing_anomaly", "args": anomaly_args})
+
         if wants_model or wants_report:
             plan.append({"tool": "get_model_result", "args": {}})
 
         if wants_recommendation:
             plan.append({"tool": "recommend_buy_options", "args": self._extract_buyer_preferences(question, district)})
+        destination_preferences = self._extract_destination_preferences(question, district)
+        if destination_preferences and wants_destination:
+            plan.append({"tool": "resolve_destination_poi", "args": destination_preferences})
+        if destination_preferences and wants_recommendation:
+            plan.append(
+                {
+                    "tool": "recommend_destination_options",
+                    "args": {
+                        **self._extract_buyer_preferences(question, district),
+                        **destination_preferences,
+                        **self._extract_mortgage_preferences(question),
+                    },
+                }
+            )
+        if wants_mortgage:
+            plan.append({"tool": "estimate_mortgage", "args": self._extract_mortgage_preferences(question)})
 
-        if wants_report or not plan or any(word in question for word in ["均价", "价格", "区县", "市场", "房价", "挂牌价"]):
+        if wants_report or not plan or (
+            not wants_sql_query
+            and any(word in question for word in ["均价", "价格", "区县", "市场", "房价", "挂牌价"])
+        ):
             plan.insert(0, {"tool": "query_market_stats", "args": {"district": district, "limit": 20}})
 
         if wants_report:
@@ -337,12 +536,16 @@ class AgentService:
     def _evidence_key(tool_name: str) -> str:
         return {
             "query_market_stats": "market",
+            "query_readonly_sql": "sql_query",
             "recommend_buy_options": "buyer_options",
+            "resolve_destination_poi": "destination",
+            "recommend_destination_options": "destination_options",
             "get_chart_series": "chart",
             "get_crawl_status": "crawl",
             "run_incremental_crawl": "crawl_task",
             "run_analysis_job": "analysis_job",
             "get_model_result": "model",
+            "estimate_mortgage": "mortgage",
             "generate_report": "report",
         }.get(tool_name, tool_name)
 
@@ -414,6 +617,66 @@ class AgentService:
         )
 
     @staticmethod
+    def _destination_conclusion(destination_options: dict) -> str:
+        items = destination_options.get("items") or []
+        summary = destination_options.get("summary") or {}
+        destination = destination_options.get("destination") or {}
+        keyword = destination_options.get("query", {}).get("destination_keyword")
+        if not items:
+            if keyword:
+                return f"当前没有检索到适合 {keyword} 周边通勤与预算条件的候选房源。"
+            return "当前没有检索到可用于目的地推荐的候选房源。"
+        top_item = items[0]
+        listing = top_item.get("listing") or {}
+        commute = top_item.get("commute_estimate") or {}
+        if commute.get("matched") and commute.get("estimated_minutes") is not None:
+            return (
+                f"如果优先考虑 {destination.get('name') or keyword} 周边通勤，"
+                f"{listing.get('district')}·{listing.get('community') or listing.get('title')} 当前更适合作为首选，"
+                f"估算通勤约 {commute.get('estimated_minutes')} 分钟。"
+            )
+        return (
+            f"当前目的地推荐先按数据库候选和质量分排序，首选是 "
+            f"{listing.get('district')}·{listing.get('community') or listing.get('title')}。"
+        )
+
+    @staticmethod
+    def _destination_evidence_lines(destination_options: dict) -> str:
+        items = destination_options.get("items") or []
+        summary = destination_options.get("summary") or {}
+        destination = destination_options.get("destination") or {}
+        keyword = destination_options.get("query", {}).get("destination_keyword")
+        if not items:
+            return "\n".join(
+                [
+                    f"- 目的地：{destination.get('name') or keyword or '未提供'}。",
+                    f"- 推荐结果：匹配 0 套；{summary.get('destination_note') or summary.get('note')}",
+                    f"- 学区说明：{summary.get('school_district_note')}",
+                ]
+            )
+        top_item = items[0]
+        listing = top_item.get("listing") or {}
+        commute = top_item.get("commute_estimate") or {}
+        mortgage = top_item.get("mortgage_estimate") or {}
+        lines = [
+            f"- 目的地：{destination.get('name') or keyword}，定位地址 {destination.get('address') or '待补充'}。",
+            f"- 候选首选：{listing.get('title')}，挂牌总价 {listing.get('total_price')} 万元，挂牌单价 {listing.get('unit_price')} 元/平方米。",
+            f"- 综合得分：数据库推荐分 {top_item.get('recommendation_score')}，目的地通勤分 {top_item.get('destination_score')}，合成分 {top_item.get('combined_score')}。",
+        ]
+        if commute.get("matched") and commute.get("estimated_minutes") is not None:
+            lines.append(
+                f"- 通勤估算：距离约 {commute.get('distance_km')} 公里，估算约 {commute.get('estimated_minutes')} 分钟；{summary.get('commute_note')}"
+            )
+        else:
+            lines.append(f"- 通勤估算：{summary.get('commute_note')}")
+        if mortgage:
+            lines.append(
+                f"- 贷款估算：首付约 {mortgage.get('down_payment')} 万元，月供约 {mortgage.get('monthly_payment')} 元。"
+            )
+        lines.append(f"- 学区说明：{summary.get('school_district_note')}")
+        return "\n".join(lines)
+
+    @staticmethod
     def _buyer_evidence_lines(buyer_options: dict, market: dict) -> str:
         items = buyer_options.get("items") or []
         summary = buyer_options.get("summary") or {}
@@ -475,7 +738,7 @@ class AgentService:
         failed_tools = [item for item in tool_calls if item.get("status") != "success"]
         if failed_tools:
             return "先处理失败工具调用，再重新提问；本次回答不会补写失败工具的数值。"
-        if "渝北" in question or "南岸" in question:
+        if "两江新区" in question or "渝北" in question or "南岸" in question:
             return "可继续查看该区县趋势图和异常样本，判断是否需要按区县补采。"
         if market.get("overview", {}).get("active_count", 0) == 0:
             return "先执行冷启动导入或增量采集，再进行 Dashboard、模型和 Agent 演示。"
@@ -498,6 +761,19 @@ class AgentService:
         )
 
     @staticmethod
+    def _destination_suggestion(destination_options: dict) -> str:
+        summary = destination_options.get("summary") or {}
+        items = destination_options.get("items") or []
+        if not items:
+            return "可放宽预算或区县条件后重试；如果重点是学区房，需要先补充独立的学校/学区数据。"
+        top_item = items[0]
+        listing = top_item.get("listing") or {}
+        return (
+            f"可继续查看 {listing.get('district')} 的相似小区，并把“真实路线时间”和“贷款月供”作为下一轮筛选条件；"
+            f"{summary.get('school_district_note')}"
+        )
+
+    @staticmethod
     def _extract_buyer_preferences(question: str, district: str | None) -> dict:
         text = question or ""
         budget_matches = [float(item) for item in __import__("re").findall(r"(\d+(?:\.\d+)?)\s*万", text)]
@@ -513,6 +789,110 @@ class AgentService:
             "prefer_metro": prefer_metro,
             "commute_mode": commute_mode,
             "limit": 5,
+        }
+
+    @staticmethod
+    def _extract_destination_preferences(question: str, district: str | None) -> dict | None:
+        text = question or ""
+        destination_keyword = None
+        for keyword in DESTINATION_KEYWORDS:
+            if keyword in text:
+                destination_keyword = keyword
+                break
+        if destination_keyword is None:
+            matches = __import__("re").findall(r"在(.{2,20}?)(?:附近|周边|旁边|边上)", text)
+            if matches:
+                destination_keyword = matches[0].strip()
+        if destination_keyword is None:
+            return None
+        return {
+            "destination_keyword": destination_keyword,
+            "district": district,
+        }
+
+    @staticmethod
+    def _extract_mortgage_preferences(question: str) -> dict:
+        text = question or ""
+        money_matches = [float(item) for item in __import__("re").findall(r"(\d+(?:\.\d+)?)\s*万", text)]
+        percent_matches = [float(item) for item in __import__("re").findall(r"(\d+(?:\.\d+)?)\s*%", text)]
+        year_matches = [int(item) for item in __import__("re").findall(r"(\d{1,2})\s*年", text)]
+        rate_matches = [float(item) for item in __import__("re").findall(r"利率(?:按|大概|约)?\s*(\d+(?:\.\d+)?)\s*%?", text)]
+        down_payment_ratio = percent_matches[0] / 100 if percent_matches else None
+        down_payment_text = None
+        for marker in ("二成", "三成", "四成", "五成"):
+            if marker in text:
+                down_payment_text = marker
+                break
+        return {
+            "purchase_price": max(money_matches) if money_matches else None,
+            "budget_max": max(money_matches) if money_matches else None,
+            "down_payment_ratio": down_payment_ratio,
+            "down_payment_text": down_payment_text,
+            "loan_years": max(year_matches) if year_matches else 30,
+            "annual_rate": rate_matches[0] if rate_matches else None,
+        }
+
+    @staticmethod
+    def _extract_listing_detail_args(question: str, district: str | None) -> dict:
+        text = question or ""
+        listing_id = None
+        source_listing_id = None
+        source = None
+        id_matches = __import__("re").findall(r"(?:系统ID|房源ID|id|ID)\s*[:：]?\s*(\d+)", text)
+        if id_matches:
+            listing_id = int(id_matches[0])
+        source_matches = __import__("re").findall(r"(fang|anjuke_mobile|lianjia)", text, flags=__import__("re").I)
+        if source_matches:
+            source = source_matches[0].lower()
+        source_id_matches = __import__("re").findall(r"(?:来源房源ID|source_listing_id)\s*[:：]?\s*([A-Za-z0-9_-]+)", text)
+        if source_id_matches:
+            source_listing_id = source_id_matches[0]
+        budget_matches = [float(item) for item in __import__("re").findall(r"(\d+(?:\.\d+)?)\s*万", text)]
+        budget_max = max(budget_matches) if budget_matches else None
+        budget_min = min(budget_matches) if len(budget_matches) > 1 else None
+        return {
+            "listing_id": listing_id,
+            "source_listing_id": source_listing_id,
+            "source": source,
+            "district": district,
+            "budget_min": budget_min,
+            "budget_max": budget_max,
+            "limit": 5,
+        }
+
+    @staticmethod
+    def _extract_district_comparison_args(question: str, district: str | None) -> dict | None:
+        text = question or ""
+        candidates = []
+        for item in DISTRICT_KEYWORDS:
+            if item in text:
+                normalized = item if item.endswith("区") or item.endswith("县") or item.endswith("新区") else f"{item}区"
+                if normalized not in candidates:
+                    candidates.append(normalized)
+        if district and district not in candidates:
+            candidates.insert(0, district)
+        if len(candidates) >= 2:
+            return {"district_a": candidates[0], "district_b": candidates[1], "limit": 100}
+        return None
+
+    @staticmethod
+    def _extract_anomaly_args(question: str) -> dict | None:
+        text = question or ""
+        listing_id = None
+        source_listing_id = None
+        id_matches = __import__("re").findall(r"(?:系统ID|房源ID|id|ID)\s*[:：]?\s*(\d+)", text)
+        if id_matches:
+            listing_id = int(id_matches[0])
+        source_id_matches = __import__("re").findall(r"(?:来源房源ID|source_listing_id)\s*[:：]?\s*([A-Za-z0-9_-]+)", text)
+        if source_id_matches:
+            source_listing_id = source_id_matches[0]
+        if listing_id is None and source_listing_id is None:
+            return None
+        source_matches = __import__("re").findall(r"(fang|anjuke_mobile|lianjia)", text, flags=__import__("re").I)
+        return {
+            "listing_id": listing_id,
+            "source_listing_id": source_listing_id,
+            "source": source_matches[0].lower() if source_matches else None,
         }
 
     @staticmethod

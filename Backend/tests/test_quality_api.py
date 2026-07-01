@@ -62,12 +62,15 @@ def test_quality_report_source_layering_and_policy(client, app):
     assert data["overview"]["total_count"] == 3
     assert data["overview"]["legacy_count"] == 1
     assert data["overview"]["new_standard_count"] == 2
+    assert data["overview"]["analysis_ready_count"] == 2
     assert data["overview"]["strict_new_standard_count"] == 1
-    assert data["overview"]["recommended_mode"] == "hybrid_cold_start"
-    assert any(item["source"] == "anjuke_legacy" and item["layer"] == "cold_start_baseline" for item in data["source_layers"])
-    assert any(item["source"] == "fang" and item["layer"] == "new_standard_crawl" for item in data["source_layers"])
+    assert data["overview"]["recommended_mode"] == "database_only_quality_filtered"
+    assert len(data["source_layers"]) == 1
+    assert data["source_layers"][0]["source"] == "fang"
+    assert data["source_layers"][0]["layer"] == "real_source"
     assert data["abnormal_samples"][0]["reason"]
     assert data["analysis_policy"]["min_quality_score"] == 80
+    assert "source in ('fang','anjuke_mobile','lianjia')" in data["analysis_policy"]["default_filters"]
     assert len(data["cleaning_steps"]) >= 6
     assert len(data["dimension_scores"]) == 6
     assert {item["key"] for item in data["dimension_scores"]} == {
@@ -78,8 +81,8 @@ def test_quality_report_source_layering_and_policy(client, app):
         "validity",
         "verifiability",
     }
-    assert data["methodology"]["version"] == "dq-v2.0"
-    assert "真实准确性" in data["methodology"]["verifiability_note"]
+    assert data["methodology"]["version"] == "dq-v2.1"
+    assert "不等同于真实准确率" in data["methodology"]["verifiability_note"]
 
 
 def test_quality_report_can_be_persisted_and_queried(client, app):

@@ -19,6 +19,53 @@ class BaseCrawler(ABC):
     description = ""
     base_url = ""
     district_map: dict[str, str] = {}
+    district_alias_map: dict[str, str] = {
+        "yubei": "渝北",
+        "yuzhong": "渝中",
+        "jiangbei": "江北",
+        "nanan": "南岸",
+        "nanana": "南岸",
+        "nan'an": "南岸",
+        "jiulongpo": "九龙坡",
+        "shapingba": "沙坪坝",
+        "dadukou": "大渡口",
+        "banan": "巴南",
+        "beibei": "北碚",
+        "bishan": "璧山",
+        "jiangjin": "江津",
+        "yongchuan": "永川",
+        "hechuan": "合川",
+        "changshou": "长寿",
+        "tongliang": "铜梁",
+        "rongchang": "荣昌",
+        "dazu": "大足",
+        "fuling": "涪陵",
+        "qijiang": "綦江",
+        "nanchuan": "南川",
+        "wanzhou": "万州",
+        "tongnan": "潼南",
+        "liangping": "梁平",
+        "kaizhou": "开州",
+        "qianjiang": "黔江",
+        "wulong": "武隆",
+        "chengkou": "城口",
+        "fengdu": "丰都",
+        "dianjiang": "垫江",
+        "dianjiangxian": "垫江",
+        "dainjiangxian": "垫江",
+        "zhongxian": "忠县",
+        "yunyang": "云阳",
+        "fengjie": "奉节",
+        "wushan": "巫山",
+        "wuxi": "巫溪",
+        "shizhu": "石柱",
+        "xiushan": "秀山",
+        "youyang": "酉阳",
+        "pengshui": "彭水",
+        "liangjiang": "两江新区",
+        "wansheng": "万盛",
+        "万盛经开区": "万盛",
+    }
     cookie_env_key: str | None = None
     headers_env_key: str | None = None
 
@@ -42,8 +89,6 @@ class BaseCrawler(ABC):
     def is_enabled(self) -> bool:
         if self.enabled_override is False:
             return False
-        if self.cookie_env_key:
-            return bool(os.getenv(self.cookie_env_key))
         if self.enabled_override is not None:
             return self.enabled_override
         return self.enabled
@@ -54,8 +99,41 @@ class BaseCrawler(ABC):
             "name": self.source_name,
             "enabled": self.is_enabled,
             "description": self.description,
-            "districts": list(self.district_map.keys()),
+            "districts": self.display_districts(),
         }
+
+    def display_districts(self) -> list[str]:
+        districts: list[str] = []
+        seen: set[str] = set()
+        for district in self.district_map.keys():
+            label = self.normalize_district_name(district)
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            districts.append(label)
+        return districts
+
+    def normalize_district_name(self, district: str | None) -> str:
+        text = str(district or "").strip()
+        if not text:
+            return ""
+        lowered = text.lower()
+        mapped = self.district_alias_map.get(lowered) or self.district_alias_map.get(text) or text
+        if mapped in self.district_map:
+            return mapped
+        stripped = self._strip_district_suffix(mapped)
+        if stripped in self.district_map:
+            return stripped
+        if text in self.district_map:
+            return text
+        return mapped
+
+    @staticmethod
+    def _strip_district_suffix(text: str) -> str:
+        for suffix in ("自治县", "新区", "区", "县"):
+            if text.endswith(suffix):
+                return text[: -len(suffix)]
+        return text
 
     def default_headers(self) -> dict:
         return {

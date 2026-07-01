@@ -6,6 +6,10 @@ interface FeatureImportanceItem {
 }
 
 export function FeatureImportance({ data = [] }: { data?: FeatureImportanceItem[] }) {
+  if (data.length === 0) {
+    return <div className="flex h-[280px] items-center justify-center" style={{ fontSize: 12, color: "#9CA3AF" }}>暂无特征重要性数据</div>;
+  }
+
   return (
     <ResponsiveContainer width="100%" height={280}>
       <BarChart data={data} layout="vertical" margin={{ left: 20, right: 30, top: 5, bottom: 5 }}>

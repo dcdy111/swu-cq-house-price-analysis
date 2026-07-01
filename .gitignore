@@ -10,13 +10,23 @@ __pycache__/
 .playwright-cli/
 .playwright-run/
 output/playwright/
+output/full_test/
+output/settings-nav-*.png
+test_screenshots/
 test-results/
 playwright-report/
 instance/
 *.sqlite
 *.db
 *.log
+/*.json
+!Frontend/public/geo/*.json
+!data/.gitkeep
 
+node_modules/
+/package-lock.json
+/package.json
+data/cookies/
 Frontend/node_modules/
 Frontend/dist/
 Frontend/.vite/

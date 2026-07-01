@@ -6,6 +6,10 @@ interface PredictionPoint {
 }
 
 export function PredVsActualScatter({ data = [] }: { data?: PredictionPoint[] }) {
+  if (data.length === 0) {
+    return <div className="flex h-[260px] items-center justify-center" style={{ fontSize: 12, color: "#9CA3AF" }}>暂无预测对比数据</div>;
+  }
+
   return (
     <ResponsiveContainer width="100%" height={260}>
       <ScatterChart margin={{ left: 5, right: 10, top: 10, bottom: 5 }}>

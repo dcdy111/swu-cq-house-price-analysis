@@ -14,7 +14,10 @@ class FangCrawler(BaseCrawler):
     description = "重庆房天下二手房列表页，当前可直接返回普通 HTML，作为默认稳定采集源。"
     base_url = "https://cq.esf.fang.com"
     district_map = {
+        # 房天下重庆首页当前已将“渝北”入口更新为“两江新区”，对应 a058。
+        # 兼容保留“江北”别名，避免旧脚本或历史任务参数直接失效。
         "两江新区": "/house-a058/",
+        "江北": "/house-a058/",
         "渝中": "/house-a056/",
         "南岸": "/house-a059/",
         "沙坪坝": "/house-a060/",

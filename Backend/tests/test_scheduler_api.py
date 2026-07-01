@@ -3,6 +3,7 @@ from __future__ import annotations
 from Backend.extensions import db
 from Backend.models.crawl import CrawlTask
 from Backend.models.quality import DataQualityReport
+from Backend.services.settings_service import SettingsService
 from Backend.services.listing_service import ListingService
 from Backend.tasks.scheduler import run_scheduled_incremental_crawl
 
@@ -15,6 +16,16 @@ def test_scheduler_status_is_available_when_disabled(client):
     assert payload["code"] == 0
     assert payload["data"]["running"] is False
     assert payload["data"]["jobs"] == []
+
+
+def test_settings_default_incremental_scope_is_all_districts(app):
+    with app.app_context():
+        settings = SettingsService.public_settings()
+        assert settings["scheduler"]["incremental_crawl_source"] == "fang"
+        assert settings["scheduler"]["incremental_crawl_districts"] == "全部"
+        assert settings["scheduler"]["incremental_crawl_interval_hours"] == 24
+        assert settings["scheduler"]["incremental_crawl_max_pages"] == 1
+        assert settings["scheduler"]["incremental_crawl_max_workers"] == 3
 
 
 def test_scheduler_manual_quality_report(client, app):
@@ -96,6 +107,45 @@ def test_scheduled_incremental_runner_accepts_runtime_overrides(app, monkeypatch
     assert captured["task_id"] == 88
     assert captured["payload"]["mode"] == "scheduled_incremental"
     assert captured["payload"]["districts"] == ["渝中"]
+
+
+def test_scheduled_incremental_runner_defaults_to_all_districts_when_scope_is_blank(app, monkeypatch):
+    captured = {}
+
+    class FakeTask:
+        id = 99
+
+    def fake_create_task(payload):
+        captured["payload"] = payload
+        return FakeTask()
+
+    def fake_run_task(task_id):
+        captured["task_id"] = task_id
+        return {"id": task_id, "status": "success"}
+
+    monkeypatch.setattr("Backend.tasks.scheduler.CrawlService.create_task", fake_create_task)
+    monkeypatch.setattr("Backend.tasks.scheduler.CrawlService.run_task", fake_run_task)
+    monkeypatch.setattr(
+        "Backend.tasks.scheduler.SettingsService.scheduler_settings",
+        lambda: {
+            "enabled": False,
+            "timezone": "Asia/Shanghai",
+            "quality_report_job_enabled": True,
+            "quality_report_interval_hours": 24,
+            "incremental_crawl_job_enabled": False,
+            "incremental_crawl_interval_hours": 24,
+            "incremental_crawl_source": "fang",
+            "incremental_crawl_districts": "",
+            "incremental_crawl_max_pages": 1,
+            "incremental_crawl_max_workers": 3,
+        },
+    )
+
+    result = run_scheduled_incremental_crawl(app)
+
+    assert result["status"] == "success"
+    assert captured["task_id"] == 99
+    assert captured["payload"]["districts"] == ["全部"]
 
 
 def test_canceled_task_keeps_replayable_evidence(client):

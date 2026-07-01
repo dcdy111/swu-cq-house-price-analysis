@@ -7,6 +7,19 @@ from Backend.services.quality_service import QualityService
 from Backend.services.settings_service import SettingsService
 
 
+def _resolve_incremental_districts(settings: dict) -> list[str]:
+    districts = [
+        item.strip()
+        for item in str(settings.get("incremental_crawl_districts") or "").split(",")
+        if item.strip()
+    ]
+    if isinstance(settings.get("districts"), list):
+        districts = [str(item).strip() for item in settings.get("districts") or [] if str(item).strip()]
+    if not districts:
+        return ["全部"]
+    return districts
+
+
 def init_scheduler(app: Flask):
     if app.config.get("TESTING"):
         app.extensions["scheduler"] = None
@@ -96,13 +109,7 @@ def run_scheduled_quality_report(app: Flask):
 def run_scheduled_incremental_crawl(app: Flask, overrides: dict | None = None):
     with app.app_context():
         settings = {**SettingsService.scheduler_settings(), **(overrides or {})}
-        districts = [
-            item.strip()
-            for item in str(settings.get("incremental_crawl_districts") or "").split(",")
-            if item.strip()
-        ]
-        if isinstance(settings.get("districts"), list):
-            districts = [str(item).strip() for item in settings.get("districts") or [] if str(item).strip()]
+        districts = _resolve_incremental_districts(settings)
         task = CrawlService.create_task(
             {
                 "name": settings.get("name") or "定时增量采集任务",

@@ -53,7 +53,7 @@ class SettingsService:
                 "incremental_crawl_job_enabled": _bool(current_app.config.get("INCREMENTAL_CRAWL_JOB_ENABLED")),
                 "incremental_crawl_interval_hours": int(current_app.config.get("INCREMENTAL_CRAWL_INTERVAL_HOURS", 24)),
                 "incremental_crawl_source": current_app.config.get("INCREMENTAL_CRAWL_SOURCE", "fang"),
-                "incremental_crawl_districts": current_app.config.get("INCREMENTAL_CRAWL_DISTRICTS", ""),
+                "incremental_crawl_districts": current_app.config.get("INCREMENTAL_CRAWL_DISTRICTS", "全部"),
                 "incremental_crawl_max_pages": int(current_app.config.get("INCREMENTAL_CRAWL_MAX_PAGES", 1)),
                 "incremental_crawl_max_workers": int(current_app.config.get("INCREMENTAL_CRAWL_MAX_WORKERS", 3)),
             },
@@ -78,6 +78,7 @@ class SettingsService:
         settings = SettingsService.defaults()
         stored = SettingsService._get_app_settings()
         SettingsService._deep_merge(settings, stored)
+        SettingsService._sanitize(settings)
         if include_secret:
             settings["deepseek"]["api_key"] = SettingsService._get_secret() or current_app.config.get("DEEPSEEK_API_KEY", "")
         return settings
@@ -176,6 +177,12 @@ class SettingsService:
         crawler["interval_max"] = max(crawler["interval_min"], float(crawler.get("interval_max") or crawler["interval_min"]))
 
         scheduler = settings["scheduler"]
+        scheduler["enabled"] = _bool(scheduler.get("enabled"))
+        scheduler["quality_report_job_enabled"] = _bool(scheduler.get("quality_report_job_enabled"))
+        scheduler["incremental_crawl_job_enabled"] = _bool(scheduler.get("incremental_crawl_job_enabled"))
+        scheduler["incremental_crawl_source"] = str(scheduler.get("incremental_crawl_source") or "fang").strip() or "fang"
+        districts = str(scheduler.get("incremental_crawl_districts") or "").strip()
+        scheduler["incremental_crawl_districts"] = districts or "全部"
         scheduler["quality_report_interval_hours"] = min(168, max(1, int(scheduler.get("quality_report_interval_hours") or 24)))
         scheduler["incremental_crawl_interval_hours"] = min(168, max(1, int(scheduler.get("incremental_crawl_interval_hours") or 24)))
         scheduler["incremental_crawl_max_pages"] = min(50, max(1, int(scheduler.get("incremental_crawl_max_pages") or 1)))

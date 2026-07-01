@@ -4,6 +4,8 @@ from flask import Blueprint, current_app, request
 
 from Backend.services.crawl_service import CrawlService
 from Backend.services.quality_service import QualityService
+from Backend.services.settings_service import SettingsService
+from Backend.tasks.scheduler import _resolve_incremental_districts
 from Backend.tasks.scheduler import scheduler_status
 from Backend.utils.response import api_error, api_success
 
@@ -26,14 +28,16 @@ def run_quality_report():
 def run_incremental_crawl():
     payload = request.get_json(silent=True) or {}
     try:
+        scheduler_settings = SettingsService.scheduler_settings()
+        merged = {**scheduler_settings, **payload}
         task = CrawlService.create_task(
             {
                 "name": payload.get("name") or "手动增量采集任务",
-                "source": payload.get("source") or current_app.config.get("INCREMENTAL_CRAWL_SOURCE", "fang"),
-                "districts": payload.get("districts") or [],
-                "max_pages": int(payload.get("max_pages") or current_app.config.get("INCREMENTAL_CRAWL_MAX_PAGES", 1)),
+                "source": payload.get("source") or scheduler_settings.get("incremental_crawl_source") or current_app.config.get("INCREMENTAL_CRAWL_SOURCE", "fang"),
+                "districts": payload.get("districts") or _resolve_incremental_districts(merged),
+                "max_pages": int(payload.get("max_pages") or scheduler_settings.get("incremental_crawl_max_pages") or current_app.config.get("INCREMENTAL_CRAWL_MAX_PAGES", 1)),
                 "max_workers": int(
-                    payload.get("max_workers") or current_app.config.get("INCREMENTAL_CRAWL_MAX_WORKERS", 3)
+                    payload.get("max_workers") or scheduler_settings.get("incremental_crawl_max_workers") or current_app.config.get("INCREMENTAL_CRAWL_MAX_WORKERS", 3)
                 ),
                 "mode": "manual_incremental",
             }

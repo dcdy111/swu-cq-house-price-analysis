@@ -85,8 +85,8 @@ def test_create_analysis_job_generates_all_result_types(client):
     assert "分类特征" in "；".join(regression["evidence"]["feature_groups"])
     assert "楼盘目标编码" in "；".join(regression["evidence"]["feature_groups"])
     assert regression["evidence"]["sampling"]["strategy"] == "district_stratified_deterministic"
-    assert regression["evidence"]["sampling"]["district_count"] == 6
-    assert regression["metrics"]["sampling_district_count"] == 6
+    assert regression["evidence"]["sampling"]["district_count"] == 7
+    assert regression["metrics"]["sampling_district_count"] == 7
 
     candidates = [item for item in data["results"] if item["result_type"] == "regression_candidate"]
     assert len(candidates) == len(regression["artifacts"]["model_comparison"])
@@ -123,6 +123,17 @@ def test_get_analysis_job_and_latest(client):
     assert latest_payload["code"] == 0
     assert latest_payload["data"]["job"]["id"] == created["id"]
     assert latest_payload["data"]["results"][0]["result_type"] == "regression"
+
+
+def test_analysis_job_pdf_export(client):
+    seed_analysis_data()
+    created = client.post("/api/analysis/jobs", json={"job_type": "all"}).get_json()["data"]
+
+    response = client.get(f"/api/analysis/jobs/{created['id']}/export.pdf")
+
+    assert response.status_code == 200
+    assert response.content_type == "application/pdf"
+    assert response.data.startswith(b"%PDF")
 
 
 def test_tune_job_runs_real_parameter_search(client):
@@ -227,6 +238,40 @@ def test_district_stratified_sampling_covers_each_available_district(app):
     assert len(records) == 6
     assert len({item["district"] for item in records}) == 6
     assert AnalysisService._load_records(max_samples=6) == records
+
+
+def test_cluster_does_not_turn_missing_house_age_into_zero():
+    records = [
+        {
+            "id": index,
+            "title": f"无楼龄样本{index}",
+            "source": "fang",
+            "district": "渝北" if index <= 5 else "南岸",
+            "community": f"样本小区{index}",
+            "total_price": 80 + index * 8,
+            "unit_price": 8000 + index * 650,
+            "area": 80 + index * 3,
+            "layout": "3室2厅",
+            "rooms": 3,
+            "halls": 2,
+            "orientation": "南",
+            "decoration": "精装",
+            "house_age": None,
+            "floor_score": 1.0,
+            "floor_level": "mid",
+            "quality": 100,
+        }
+        for index in range(1, 11)
+    ]
+
+    result = AnalysisService._cluster_result(records)
+
+    assert result["metrics"]["status"] == "ok"
+    assert "房龄" not in "；".join(result["evidence"]["features"])
+    assert "不把未知楼龄当作 0 年" in result["evidence"]["house_age_policy"]
+    assert result["artifacts"]["clusters"]
+    assert all(item["avg_house_age"] is None for item in result["artifacts"]["clusters"])
+    assert all(item["house_age"] is None for item in result["artifacts"]["points"])
 
 
 def test_allocate_strata_is_bounded_and_preserves_coverage():

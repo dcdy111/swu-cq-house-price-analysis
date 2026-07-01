@@ -11,21 +11,53 @@ from Backend.crawlers.base import BaseCrawler
 class LianjiaCrawler(BaseCrawler):
     source_key = "lianjia"
     source_name = "链家移动端"
-    enabled = False
+    enabled = True
     cookie_env_key = "LIANJIA_COOKIE"
-    description = "链家移动端重庆二手房页；需配置 LIANJIA_COOKIE，适合作为高质量实验源，不默认大规模采集。"
+    description = "链家移动端重庆二手房页，可作为高质量实验源。Cookie 通过 LIANJIA_COOKIE / LIANJIA_HEADERS_RAW 配置可选生效；反爬较强时任务可能失败，但任务与日志仍会写入数据库。"
     base_url = "https://m.lianjia.com"
     district_map = {
-        "全部": "/cq/ershoufang/",
-        "江北": "/cq/ershoufang/jiangbei/",
+        # 主城核心九区
         "渝北": "/cq/ershoufang/yubei/",
+        "渝中": "/cq/ershoufang/yuzhong/",
+        "江北": "/cq/ershoufang/jiangbei/",
         "南岸": "/cq/ershoufang/nanan/",
-        "巴南": "/cq/ershoufang/banan/",
         "沙坪坝": "/cq/ershoufang/shapingba/",
         "九龙坡": "/cq/ershoufang/jiulongpo/",
-        "渝中": "/cq/ershoufang/yuzhong/",
         "大渡口": "/cq/ershoufang/dadukou/",
         "北碚": "/cq/ershoufang/beibei/",
+        "巴南": "/cq/ershoufang/banan/",
+        # 主城新区
+        "璧山": "/cq/ershoufang/bishan/",
+        "永川": "/cq/ershoufang/yongchuan/",
+        "合川": "/cq/ershoufang/hechuan/",
+        "江津": "/cq/ershoufang/jiangjin/",
+        "铜梁": "/cq/ershoufang/tongliang/",
+        "大足": "/cq/ershoufang/dazu/",
+        "荣昌": "/cq/ershoufang/rongchang/",
+        "綦江": "/cq/ershoufang/qijiang/",
+        "南川": "/cq/ershoufang/nanchuan/",
+        "长寿": "/cq/ershoufang/changshou/",
+        "万盛": "/cq/ershoufang/wansheng/",
+        # 区域副中心
+        "万州": "/cq/ershoufang/wanzhou/",
+        "涪陵": "/cq/ershoufang/fuling/",
+        "黔江": "/cq/ershoufang/qianjiang/",
+        "武隆": "/cq/ershoufang/wulong/",
+        # 县
+        "开州": "/cq/ershoufang/kaizhou/",
+        "垫江": "/cq/ershoufang/dianjiang/",
+        "梁平": "/cq/ershoufang/liangping/",
+        "丰都": "/cq/ershoufang/fengdu/",
+        "奉节": "/cq/ershoufang/fengjie/",
+        "云阳": "/cq/ershoufang/yunyang/",
+        "巫山": "/cq/ershoufang/wushan/",
+        "巫溪": "/cq/ershoufang/wuxi/",
+        "城口": "/cq/ershoufang/chengkou/",
+        "石柱": "/cq/ershoufang/shizhu/",
+        "秀山": "/cq/ershoufang/xiushan/",
+        "忠县": "/cq/ershoufang/zhongxian/",
+        "彭水": "/cq/ershoufang/pengshui/",
+        "酉阳": "/cq/ershoufang/youyang/",
     }
 
     def build_url(self, district: str, page: int) -> str:

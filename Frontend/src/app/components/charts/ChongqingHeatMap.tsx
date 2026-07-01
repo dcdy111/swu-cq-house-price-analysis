@@ -3,6 +3,7 @@ import * as echarts from "echarts";
 import type { EChartsOption } from "echarts";
 
 export type ChongqingMapMetric = "avgPrice" | "count" | "quality";
+export type ChongqingMapBackend = "amap" | "geojson";
 
 export interface District {
   name: string;
@@ -17,18 +18,73 @@ interface ChongqingHeatMapProps {
   data?: District[];
   selectedDistrict?: string | null;
   onSelectDistrict?: (district: District | null) => void;
+  onBackendChange?: (backend: ChongqingMapBackend) => void;
   height?: number;
 }
 
-const METRIC_META: Record<ChongqingMapMetric, { label: string; unit: string; minLabel: string; maxLabel: string; desc: string }> = {
+type GeoJsonFeature = {
+  geometry?: {
+    type?: string;
+    coordinates?: number[][][][];
+  };
+  properties?: {
+    name?: string;
+    center?: [number, number];
+    centroid?: [number, number];
+  };
+};
+
+type GeoJsonData = {
+  features?: GeoJsonFeature[];
+};
+
+type AMapNamespace = {
+  InfoWindow: new (options?: Record<string, any>) => any;
+  Map: new (container: HTMLElement, options?: Record<string, any>) => any;
+  Marker: new (options?: Record<string, any>) => any;
+  Pixel: new (x: number, y: number) => any;
+  Polygon: new (options?: Record<string, any>) => any;
+};
+
+declare global {
+  interface Window {
+    AMap?: AMapNamespace;
+    AMapLoader?: {
+      load: (options: Record<string, any>) => Promise<AMapNamespace>;
+    };
+    _AMapSecurityConfig?: {
+      securityJsCode?: string;
+    };
+    __cqAmapLoaderPromise?: Promise<AMapNamespace>;
+  }
+}
+
+const AMAP_KEY = (import.meta as any).env?.VITE_AMAP_WEB_KEY as string | undefined;
+const AMAP_SECURITY_CODE = (import.meta as any).env?.VITE_AMAP_SECURITY_CODE as string | undefined;
+const AMAP_LOADER_URL = "https://webapi.amap.com/loader.js";
+const GEOJSON_URL = "/geo/chongqing.json";
+const CHONGQING_CENTER: [number, number] = [107.76, 29.68];
+const MAP_COLORS = ["#DBEAFE", "#93C5FD", "#3B82F6", "#1D4ED8", "#1E3A8A"];
+
+const METRIC_META: Record<
+  ChongqingMapMetric,
+  { label: string; unit: string; minLabel: string; maxLabel: string; desc: string }
+> = {
   avgPrice: { label: "挂牌均价", unit: "元/㎡", minLabel: "低价区", maxLabel: "高价区", desc: "近30日挂牌均价" },
   count: { label: "样本量", unit: "套", minLabel: "低密度", maxLabel: "高密度", desc: "有效挂牌房源数" },
   quality: { label: "质量评分", unit: "分", minLabel: "较低", maxLabel: "较高", desc: "数据完整度评分" },
 };
 
 const MAIN_CITY_DISTRICTS = new Set([
-  "渝中区", "江北区", "渝北区", "南岸区", "沙坪坝区",
-  "九龙坡区", "大渡口区", "巴南区", "北碚区",
+  "渝中区",
+  "江北区",
+  "渝北区",
+  "南岸区",
+  "沙坪坝区",
+  "九龙坡区",
+  "大渡口区",
+  "巴南区",
+  "北碚区",
 ]);
 
 const DISTRICT_SHORT_LABELS: Record<string, string> = {
@@ -86,7 +142,12 @@ function shortDistrictName(name: string) {
   return DISTRICT_SHORT_LABELS[name] ?? name.replace(/土家族苗族自治县|苗族土家族自治县|土家族自治县/g, "").replace(/[区县]$/, "");
 }
 
-function buildTooltip(params: any, metric: ChongqingMapMetric, meta: typeof METRIC_META.avgPrice, districtByName: Map<string, District>) {
+function buildTooltip(
+  params: { name: string },
+  metric: ChongqingMapMetric,
+  meta: typeof METRIC_META.avgPrice,
+  districtByName: Map<string, District>
+) {
   const districtName = params.name;
   const district = districtByName.get(districtName);
   const isMainCity = MAIN_CITY_DISTRICTS.has(districtName);
@@ -144,15 +205,139 @@ function buildTooltip(params: any, metric: ChongqingMapMetric, meta: typeof METR
   </div>`;
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hexToRgb(hex: string) {
+  const normalized = hex.replace("#", "");
+  const parsed = Number.parseInt(normalized, 16);
+  return {
+    r: (parsed >> 16) & 255,
+    g: (parsed >> 8) & 255,
+    b: parsed & 255,
+  };
+}
+
+function rgbToHex({ r, g, b }: { r: number; g: number; b: number }) {
+  return `#${[r, g, b].map(value => Math.round(clamp(value, 0, 255)).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function interpolateColor(from: string, to: string, ratio: number) {
+  const a = hexToRgb(from);
+  const b = hexToRgb(to);
+  return rgbToHex({
+    r: a.r + (b.r - a.r) * ratio,
+    g: a.g + (b.g - a.g) * ratio,
+    b: a.b + (b.b - a.b) * ratio,
+  });
+}
+
+function getMetricColor(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return "#E5E7EB";
+  if (max <= min) return MAP_COLORS[MAP_COLORS.length - 1];
+
+  const ratio = clamp((value - min) / (max - min), 0, 1);
+  const scaled = ratio * (MAP_COLORS.length - 1);
+  const index = Math.min(Math.floor(scaled), MAP_COLORS.length - 2);
+  const remainder = scaled - index;
+  return interpolateColor(MAP_COLORS[index], MAP_COLORS[index + 1], remainder);
+}
+
+function buildDistrictCenters(geoJson: GeoJsonData) {
+  return Object.fromEntries(
+    (geoJson.features ?? [])
+      .map(feature => {
+        const center = feature?.properties?.center ?? feature?.properties?.centroid;
+        const name = feature?.properties?.name;
+        if (!name || !Array.isArray(center) || center.length < 2) {
+          return null;
+        }
+        return [name, [Number(center[0]), Number(center[1])] as [number, number]];
+      })
+      .filter(Boolean)
+  ) as Record<string, [number, number]>;
+}
+
+function loadExternalScript(src: string, id: string) {
+  return new Promise<void>((resolve, reject) => {
+    const existing = document.getElementById(id) as HTMLScriptElement | null;
+    if (existing) {
+      if (existing.dataset.loaded === "true") {
+        resolve();
+        return;
+      }
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", () => reject(new Error("高德 Loader 脚本加载失败")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = id;
+    script.src = src;
+    script.async = true;
+    script.defer = true;
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error("高德 Loader 脚本加载失败")), { once: true });
+    document.head.appendChild(script);
+  });
+}
+
+async function loadAmap() {
+  if (!AMAP_KEY) {
+    throw new Error("未配置高德 Web Key");
+  }
+  if (window.AMap?.Map) {
+    return window.AMap;
+  }
+  if (window.__cqAmapLoaderPromise) {
+    return window.__cqAmapLoaderPromise;
+  }
+
+  if (AMAP_SECURITY_CODE) {
+    window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE };
+  }
+
+  const loaderPromise = (async () => {
+    await loadExternalScript(AMAP_LOADER_URL, "cq-amap-loader-script");
+    if (!window.AMapLoader?.load) {
+      throw new Error("高德 Loader 未就绪");
+    }
+    return window.AMapLoader.load({
+      key: AMAP_KEY,
+      version: "2.0",
+    });
+  })();
+
+  window.__cqAmapLoaderPromise = loaderPromise.catch(error => {
+    window.__cqAmapLoaderPromise = undefined;
+    throw error;
+  });
+
+  return window.__cqAmapLoaderPromise;
+}
+
 export function ChongqingHeatMap({
   metric = "avgPrice",
   data,
   selectedDistrict,
   onSelectDistrict,
+  onBackendChange,
   height = 285,
 }: ChongqingHeatMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
+  const amapRef = useRef<any>(null);
+  const amapDistrictPolygonsRef = useRef<Array<{ name: string; polygons: any[] }>>([]);
+  const amapInfoWindowRef = useRef<any>(null);
+  const amapSelectionMarkerRef = useRef<any>(null);
+  const geoJsonRef = useRef<GeoJsonData | null>(null);
+  const didFitViewRef = useRef(false);
+
+  const [activeBackend, setActiveBackend] = useState<ChongqingMapBackend>(AMAP_KEY ? "amap" : "geojson");
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [districtCenters, setDistrictCenters] = useState<Record<string, [number, number]>>({});
@@ -209,52 +394,272 @@ export function ChongqingHeatMap({
   }, [chartData]);
 
   useEffect(() => {
-    if (!containerRef.current) return;
-    const chart = echarts.init(containerRef.current, undefined, { renderer: "canvas" });
-    chartRef.current = chart;
+    onBackendChange?.(activeBackend);
+  }, [activeBackend, onBackendChange]);
 
+  useEffect(() => {
     let disposed = false;
-    fetch("/geo/chongqing.json")
-      .then(response => {
-        if (!response.ok) throw new Error(`地图资源加载失败: ${response.status}`);
-        return response.json();
-      })
-      .then(geoJson => {
-        if (disposed) return;
-        echarts.registerMap("chongqing", geoJson);
-        const centers = Object.fromEntries(
-          (geoJson.features ?? [])
-            .map((feature: any) => {
-              const center = feature?.properties?.center ?? feature?.properties?.centroid;
-              const name = feature?.properties?.name;
-              if (!name || !Array.isArray(center) || center.length < 2) {
-                return null;
-              }
-              return [name, [Number(center[0]), Number(center[1])] as [number, number]];
-            })
-            .filter(Boolean),
-        ) as Record<string, [number, number]>;
-        setDistrictCenters(centers);
-        setMapReady(true);
-      })
-      .catch(error => {
-        if (!disposed) setMapError(error instanceof Error ? error.message : "地图资源加载失败");
+    const resizeObserver = new ResizeObserver(() => {
+      chartRef.current?.resize();
+      amapRef.current?.resize?.();
+    });
+
+    const destroyChart = () => {
+      chartRef.current?.dispose();
+      chartRef.current = null;
+    };
+
+    const destroyAmapLayer = () => {
+      amapSelectionMarkerRef.current?.setMap?.(null);
+      amapSelectionMarkerRef.current = null;
+      for (const group of amapDistrictPolygonsRef.current) {
+        for (const polygon of group.polygons) {
+          polygon?.setMap?.(null);
+        }
+      }
+      amapDistrictPolygonsRef.current = [];
+      amapInfoWindowRef.current?.close?.();
+      amapInfoWindowRef.current = null;
+    };
+
+    const destroyAmap = () => {
+      destroyAmapLayer();
+      amapRef.current?.destroy?.();
+      amapRef.current = null;
+    };
+
+    const initEcharts = (geoJson: GeoJsonData) => {
+      if (!containerRef.current) {
+        throw new Error("地图容器不存在");
+      }
+      destroyAmap();
+      destroyChart();
+      containerRef.current.innerHTML = "";
+      const chart = echarts.init(containerRef.current, undefined, { renderer: "canvas" });
+      chartRef.current = chart;
+      echarts.registerMap("chongqing", geoJson as Record<string, any>);
+      setActiveBackend("geojson");
+      setMapReady(true);
+      setMapError(null);
+    };
+
+    const initAmap = async (geoJson: GeoJsonData) => {
+      if (!containerRef.current) {
+        throw new Error("地图容器不存在");
+      }
+
+      const AMap = await loadAmap();
+      if (disposed) {
+        return;
+      }
+
+      destroyChart();
+      destroyAmap();
+      containerRef.current.innerHTML = "";
+
+      const map = new AMap.Map(containerRef.current, {
+        center: CHONGQING_CENTER,
+        zoom: 7,
+        mapStyle: "amap://styles/whitesmoke",
+        resizeEnable: true,
+        dragEnable: true,
+        zoomEnable: true,
+        jogEnable: false,
+        doubleClickZoom: true,
+        features: ["bg", "road", "point"],
       });
 
-    const resizeObserver = new ResizeObserver(() => chart.resize());
-    resizeObserver.observe(containerRef.current);
+      amapRef.current = map;
+      setActiveBackend("amap");
+      setMapReady(true);
+      setMapError(null);
+    };
+
+    const init = async () => {
+      if (containerRef.current) {
+        resizeObserver.observe(containerRef.current);
+      }
+      setMapReady(false);
+      setMapError(null);
+
+      try {
+        const response = await fetch(GEOJSON_URL);
+        if (!response.ok) {
+          throw new Error(`地图资源加载失败: ${response.status}`);
+        }
+        const geoJson = await response.json();
+        if (disposed) {
+          return;
+        }
+
+        geoJsonRef.current = geoJson;
+        setDistrictCenters(buildDistrictCenters(geoJson));
+
+        if (AMAP_KEY) {
+          try {
+            await initAmap(geoJson);
+            return;
+          } catch (error) {
+            console.warn("高德底图加载失败，已回退到本地 GeoJSON：", error);
+          }
+        }
+
+        initEcharts(geoJson);
+      } catch (error) {
+        if (!disposed) {
+          destroyChart();
+          destroyAmap();
+          setMapReady(false);
+          setMapError(error instanceof Error ? error.message : "地图资源加载失败");
+        }
+      }
+    };
+
+    init();
 
     return () => {
       disposed = true;
       resizeObserver.disconnect();
-      chart.dispose();
-      chartRef.current = null;
+      destroyChart();
+      destroyAmap();
     };
   }, []);
 
   useEffect(() => {
+    if (activeBackend !== "amap" || !mapReady || !geoJsonRef.current || !amapRef.current || !window.AMap) {
+      return;
+    }
+
+    const AMap = window.AMap;
+    const map = amapRef.current;
+    const meta = METRIC_META[metric];
+
+    amapSelectionMarkerRef.current?.setMap?.(null);
+    amapSelectionMarkerRef.current = null;
+    for (const group of amapDistrictPolygonsRef.current) {
+      for (const polygon of group.polygons) {
+        polygon?.setMap?.(null);
+      }
+    }
+    amapDistrictPolygonsRef.current = [];
+
+    const getDistrictStyle = (districtName: string, hovered = false) => {
+      const district = districtByName.get(districtName);
+      const fillColor = district ? getMetricColor(metricValue(district, metric), valueRange.min, valueRange.max) : "#E5E7EB";
+      const isSelected = selectedDistrict === districtName;
+      return {
+        strokeColor: isSelected ? "#1D4ED8" : hovered ? "#F59E0B" : "#FFFFFF",
+        strokeWeight: isSelected ? 3 : hovered ? 2.2 : 1.2,
+        fillColor,
+        fillOpacity: isSelected ? 0.96 : district ? (hovered ? 0.9 : 0.76) : 0.3,
+        cursor: "pointer",
+        bubble: true,
+        zIndex: isSelected ? 60 : hovered ? 40 : 20,
+      };
+    };
+
+    const ensureInfoWindow = () => {
+      if (!amapInfoWindowRef.current) {
+        amapInfoWindowRef.current = new AMap.InfoWindow({
+          offset: new AMap.Pixel(0, -6),
+          closeWhenClickMap: true,
+          isCustom: false,
+        });
+      }
+      return amapInfoWindowRef.current;
+    };
+
+    const polygonGroups = (geoJsonRef.current.features ?? [])
+      .map(feature => {
+        const districtName = feature?.properties?.name ?? "";
+        const multiPolygon = feature?.geometry?.coordinates ?? [];
+        if (!districtName || !Array.isArray(multiPolygon) || multiPolygon.length === 0) {
+          return null;
+        }
+
+        const polygons = multiPolygon.map(polygonCoordinates => new AMap.Polygon({
+          path: polygonCoordinates,
+          ...getDistrictStyle(districtName),
+        }));
+
+        const applyStyle = (hovered = false) => {
+          for (const polygon of polygons) {
+            polygon.setOptions(getDistrictStyle(districtName, hovered));
+          }
+        };
+
+        for (const polygon of polygons) {
+          polygon.on("mouseover", (event: any) => {
+            applyStyle(true);
+            const infoWindow = ensureInfoWindow();
+            infoWindow.setContent(buildTooltip({ name: districtName }, metric, meta, districtByName));
+            const center = districtCenters[districtName] ?? CHONGQING_CENTER;
+            infoWindow.open(map, event?.lnglat ?? center);
+          });
+
+          polygon.on("mousemove", (event: any) => {
+            const infoWindow = ensureInfoWindow();
+            if (event?.lnglat) {
+              infoWindow.setPosition(event.lnglat);
+            }
+          });
+
+          polygon.on("mouseout", () => {
+            applyStyle(false);
+            amapInfoWindowRef.current?.close?.();
+          });
+
+          polygon.on("click", () => {
+            const district = districtByName.get(districtName);
+            onSelectDistrict?.(district ?? null);
+          });
+        }
+
+        return { name: districtName, polygons };
+      })
+      .filter(Boolean) as Array<{ name: string; polygons: any[] }>;
+
+    amapDistrictPolygonsRef.current = polygonGroups;
+    map.add(polygonGroups.flatMap(group => group.polygons));
+
+    if (!didFitViewRef.current) {
+      map.setFitView?.();
+      didFitViewRef.current = true;
+    }
+
+    if (selectedDistrict && selectedMarkerData.length > 0) {
+      const marker = new AMap.Marker({
+        position: [selectedMarkerData[0].value[0], selectedMarkerData[0].value[1]],
+        offset: new AMap.Pixel(0, -18),
+        anchor: "bottom-center",
+        content: `
+          <div style="display:flex;flex-direction:column;align-items:center;pointer-events:none;">
+            <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.96);border:1px solid #BFDBFE;border-radius:999px;padding:6px 10px;box-shadow:0 8px 20px rgba(15,23,42,0.12);white-space:nowrap;">
+              <span style="width:8px;height:8px;border-radius:999px;background:#F59E0B;box-shadow:0 0 0 6px rgba(245,158,11,0.18);animation:pulse 1.8s ease-in-out infinite;"></span>
+              <span style="font-size:12px;line-height:1;color:#163A70;font-weight:700;">${shortDistrictName(selectedMarkerData[0].name)} ${selectedMarkerData[0].count.toLocaleString()}套</span>
+            </div>
+          </div>
+        `,
+      });
+      marker.setMap(map);
+      amapSelectionMarkerRef.current = marker;
+    }
+  }, [
+    activeBackend,
+    districtByName,
+    districtCenters,
+    mapReady,
+    metric,
+    onSelectDistrict,
+    selectedDistrict,
+    selectedMarkerData,
+    valueRange.max,
+    valueRange.min,
+  ]);
+
+  useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !mapReady) return;
+    if (!chart || !mapReady || activeBackend !== "geojson") return;
 
     const meta = METRIC_META[metric];
 
@@ -268,7 +673,7 @@ export function ChongqingHeatMap({
         padding: [10, 14],
         textStyle: { color: "#374151", fontSize: 12 },
         extraCssText: "border-radius:10px; box-shadow: 0 4px 24px rgba(0,0,0,0.10);",
-        formatter: params => buildTooltip(params, metric, METRIC_META[metric], districtByName),
+        formatter: params => buildTooltip(params as { name: string }, metric, meta, districtByName),
       },
       geo: {
         map: "chongqing",
@@ -300,7 +705,7 @@ export function ChongqingHeatMap({
         text: [meta.maxLabel, meta.minLabel],
         textStyle: { color: "#6B7280", fontSize: 11 },
         inRange: {
-          color: ["#DBEAFE", "#93C5FD", "#3B82F6", "#1D4ED8", "#1E3A8A"],
+          color: MAP_COLORS,
         },
         formatter: value => `${formatMetric(Number(value), metric)} ${meta.unit}`,
       },
@@ -417,7 +822,18 @@ export function ChongqingHeatMap({
       const district = districtByName.get(params.name);
       onSelectDistrict?.(district ?? null);
     });
-  }, [chartData, districtByName, mapReady, metric, onSelectDistrict, selectedDistrict, selectedMarkerData, valueRange.max, valueRange.min]);
+  }, [
+    activeBackend,
+    chartData,
+    districtByName,
+    mapReady,
+    metric,
+    onSelectDistrict,
+    selectedDistrict,
+    selectedMarkerData,
+    valueRange.max,
+    valueRange.min,
+  ]);
 
   const meta = METRIC_META[metric];
 
@@ -439,13 +855,17 @@ export function ChongqingHeatMap({
     <div className="relative">
       {!mapReady && (
         <div
-          className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-xl"
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-xl"
           style={{ background: "rgba(248,250,252,0.88)", backdropFilter: "blur(2px)" }}
         >
           <div
             style={{
-              width: 28, height: 28, borderRadius: "50%", border: "2.5px solid #BFDBFE",
-              borderTopColor: "#3B82F6", animation: "spin 0.8s linear infinite",
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              border: "2.5px solid #BFDBFE",
+              borderTopColor: "#3B82F6",
+              animation: "spin 0.8s linear infinite",
             }}
           />
           <span style={{ color: "#6B7280", fontSize: 13, marginTop: 10 }}>
@@ -453,6 +873,34 @@ export function ChongqingHeatMap({
           </span>
         </div>
       )}
+
+      {activeBackend === "amap" && mapReady && (
+        <div
+          className="pointer-events-none absolute left-3 top-3 z-10 rounded-lg px-3 py-2"
+          style={{
+            background: "rgba(255,255,255,0.94)",
+            border: "1px solid #E5EAF2",
+            boxShadow: "0 8px 20px rgba(15,23,42,0.08)",
+          }}
+        >
+          <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 6 }}>
+            {meta.label} · {meta.minLabel} / {meta.maxLabel}
+          </div>
+          <div
+            style={{
+              width: 132,
+              height: 10,
+              borderRadius: 999,
+              background: `linear-gradient(90deg, ${MAP_COLORS.join(",")})`,
+            }}
+          />
+          <div className="mt-1 flex items-center justify-between" style={{ fontSize: 10, color: "#64748B" }}>
+            <span>{formatMetric(valueRange.min, metric)}</span>
+            <span>{formatMetric(valueRange.max, metric)} {meta.unit}</span>
+          </div>
+        </div>
+      )}
+
       <div ref={containerRef} style={{ width: "100%", height, borderRadius: 12, overflow: "hidden" }} />
 
       <div
@@ -461,10 +909,11 @@ export function ChongqingHeatMap({
       >
         <div className="flex items-center gap-3">
           <span>{meta.desc}</span>
+          <span style={{ color: "#64748B" }}>{activeBackend === "amap" ? "高德底图" : "本地 GeoJSON"}</span>
         </div>
         <span style={{ color: "#6B7280" }}>滚轮缩放 · 拖动平移</span>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12); opacity: 0.78; } }`}</style>
     </div>
   );
 }

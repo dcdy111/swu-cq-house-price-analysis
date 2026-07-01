@@ -15,6 +15,7 @@ SPEC.loader.exec_module(run_full_crawl)
 build_page_ranges = run_full_crawl.build_page_ranges
 parse_csv_items = run_full_crawl.parse_csv_items
 resolve_districts = run_full_crawl.resolve_districts
+dedupe_districts_by_path = run_full_crawl.dedupe_districts_by_path
 
 
 def test_build_page_ranges_uses_real_page_offsets():
@@ -39,3 +40,13 @@ def test_resolve_districts_supports_all_keyword():
 def test_resolve_districts_rejects_unknown_name():
     with pytest.raises(ValueError, match="未配置这些区县"):
         resolve_districts("渝中,不存在", {"渝中": "/a/"})
+
+
+def test_dedupe_districts_by_path_keeps_first_alias():
+    districts, skipped = dedupe_districts_by_path(
+        ["两江新区", "江北", "渝中"],
+        {"两江新区": "/house-a058/", "江北": "/house-a058/", "渝中": "/house-a056/"},
+    )
+
+    assert districts == ["两江新区", "渝中"]
+    assert skipped == [{"district": "江北", "same_as": "两江新区", "path": "/house-a058/"}]

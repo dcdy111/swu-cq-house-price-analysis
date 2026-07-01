@@ -70,7 +70,9 @@ def test_fang_parse_mobile_list_card():
 def test_fang_district_map_contains_uploaded_mobile_filters():
     crawler = FangCrawler(interval=(0, 0))
 
-    assert len(crawler.district_map) >= 35
+    assert len(crawler.district_map) >= 38
+    assert crawler.build_url("两江新区", 1) == "https://cq.esf.fang.com/house-a058/"
+    assert crawler.build_url("江北", 1) == "https://cq.esf.fang.com/house-a058/"
     assert crawler.build_url("开州", 2) == "https://cq.esf.fang.com/house-a016748/i32/"
     assert crawler.build_url("秀山", 1) == "https://cq.esf.fang.com/house-a017400/"
 

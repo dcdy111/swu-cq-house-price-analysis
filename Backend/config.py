@@ -29,7 +29,7 @@ class BaseConfig:
     JSON_AS_ASCII = False
 
     CRAWL_MAX_WORKERS = int(os.getenv("CRAWL_MAX_WORKERS", "4"))
-    CRAWL_MAX_PAGES_PER_DISTRICT = int(os.getenv("CRAWL_MAX_PAGES_PER_DISTRICT", "200"))
+    CRAWL_MAX_PAGES_PER_DISTRICT = int(os.getenv("CRAWL_MAX_PAGES_PER_DISTRICT", "500"))
     CRAWL_REQUEST_TIMEOUT = int(os.getenv("CRAWL_REQUEST_TIMEOUT", "15"))
     CRAWL_RETRY_TIMES = int(os.getenv("CRAWL_RETRY_TIMES", "2"))
     CRAWL_INTERVAL_MIN = float(os.getenv("CRAWL_INTERVAL_MIN", "1.0"))
@@ -46,6 +46,13 @@ class BaseConfig:
     DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
     DEEPSEEK_TIMEOUT = int(os.getenv("DEEPSEEK_TIMEOUT", "30"))
 
+    AMAP_KEY = os.getenv("AMAP_KEY", "")
+    AMAP_SECURITY_KEY = os.getenv("AMAP_SECURITY_KEY", "")
+    AMAP_WEB_KEY = os.getenv("AMAP_WEB_KEY", "")
+    AMAP_WEB_SECURITY_KEY = os.getenv("AMAP_WEB_SECURITY_KEY", "")
+    AMAP_ENABLE_ROUTE = os.getenv("AMAP_ENABLE_ROUTE", "true").lower() in {"1", "true", "yes", "on"}
+    AMAP_TIMEOUT = int(os.getenv("AMAP_TIMEOUT", "10"))
+
     SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     SCHEDULER_TIMEZONE = os.getenv("SCHEDULER_TIMEZONE", "Asia/Shanghai")
     QUALITY_REPORT_JOB_ENABLED = os.getenv("QUALITY_REPORT_JOB_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
@@ -58,7 +65,7 @@ class BaseConfig:
     }
     INCREMENTAL_CRAWL_INTERVAL_HOURS = int(os.getenv("INCREMENTAL_CRAWL_INTERVAL_HOURS", "24"))
     INCREMENTAL_CRAWL_SOURCE = os.getenv("INCREMENTAL_CRAWL_SOURCE", "fang")
-    INCREMENTAL_CRAWL_DISTRICTS = os.getenv("INCREMENTAL_CRAWL_DISTRICTS", "")
+    INCREMENTAL_CRAWL_DISTRICTS = os.getenv("INCREMENTAL_CRAWL_DISTRICTS", "全部")
     INCREMENTAL_CRAWL_MAX_PAGES = int(os.getenv("INCREMENTAL_CRAWL_MAX_PAGES", "1"))
     INCREMENTAL_CRAWL_MAX_WORKERS = int(os.getenv("INCREMENTAL_CRAWL_MAX_WORKERS", "3"))
 

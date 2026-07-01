@@ -69,7 +69,7 @@ def main() -> int:
             args.base_url,
             "/api/agent/chat",
             method="POST",
-            body={"question": "渝北区均价是多少？"},
+            body={"question": "两江新区挂牌均价是多少？"},
             token=token,
         )
         data = payload.get("data") or {}

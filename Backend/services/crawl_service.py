@@ -33,11 +33,25 @@ class CrawlService:
         districts = payload.get("districts") or []
         if isinstance(districts, str):
             districts = [x.strip() for x in districts.split(",") if x.strip()]
+        normalized_districts: list[str] = []
+        seen: set[str] = set()
+        for district in districts:
+            normalized = crawler.normalize_district_name(str(district))
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                normalized_districts.append(normalized)
+        districts = normalized_districts
         if any(str(item).lower() in {"all", "全部", "全部区县"} for item in districts):
-            districts = list(crawler.district_map.keys())
+            districts = crawler.display_districts() if hasattr(crawler, "display_districts") else list(crawler.district_map.keys())
         if not districts:
-            districts = list(crawler.district_map.keys())[:1]
-        invalid = [item for item in districts if item not in crawler.district_map]
+            districts = crawler.display_districts()[:1] if hasattr(crawler, "display_districts") else list(crawler.district_map.keys())[:1]
+        invalid = []
+        resolved_districts: list[str] = []
+        for district in districts:
+            if district in crawler.district_map:
+                resolved_districts.append(district)
+                continue
+            invalid.append(district)
         if invalid:
             raise ValueError(f"{crawler.source_name} 未配置这些区县: {', '.join(invalid)}")
 
@@ -46,7 +60,7 @@ class CrawlService:
             "crawler": crawler,
             "name": str(payload.get("name") or f"{crawler.source_name}采集任务").strip() or f"{crawler.source_name}采集任务",
             "mode": str(payload.get("mode") or "manual").strip() or "manual",
-            "districts": districts,
+            "districts": resolved_districts,
             "max_pages": max_pages,
             "max_workers": max_workers,
         }

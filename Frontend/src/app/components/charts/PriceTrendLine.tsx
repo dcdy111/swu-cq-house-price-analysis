@@ -1,4 +1,4 @@
-import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
+import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, LineChart, Legend } from "recharts";
 import { PriceTrendItem } from "../../services/api";
 
 interface PriceTrendLineProps {
@@ -29,16 +29,16 @@ export function PriceTrendLine({ data: apiData }: PriceTrendLineProps) {
 
   return (
     <ResponsiveContainer width="100%" height={200}>
-      <AreaChart data={data} margin={{ left: 5, right: 10, top: 5, bottom: 5 }}>
-        <defs>
-          <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#163A70" stopOpacity={0.15} />
-            <stop offset="95%" stopColor="#163A70" stopOpacity={0} />
-          </linearGradient>
-        </defs>
+      <LineChart data={data} margin={{ left: 8, right: 18, top: 8, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#E5EAF2" />
-        <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#9CA3AF" }} />
-        <YAxis domain={["auto", "auto"]} tickFormatter={v => `${(v/1000).toFixed(1)}k`} tick={{ fontSize: 11, fill: "#9CA3AF" }} width={40} />
+        <XAxis
+          dataKey="month"
+          padding={{ left: 14, right: 14 }}
+          tickMargin={8}
+          tick={{ fontSize: 11, fill: "#9CA3AF" }}
+        />
+        <YAxis domain={["auto", "auto"]} tickFormatter={v => `${(v/1000).toFixed(1)}k`} tick={{ fontSize: 11, fill: "#9CA3AF" }} width={52} />
+        <Legend wrapperStyle={{ fontSize: 11, color: "#6B7280" }} />
         <Tooltip
           labelFormatter={(_, payload) => String(payload?.[0]?.payload?.rawLabel ?? "")}
           formatter={(v: number, _name, item: any) => [
@@ -51,8 +51,17 @@ export function PriceTrendLine({ data: apiData }: PriceTrendLineProps) {
           ]}
           contentStyle={{ fontSize: 12 }}
         />
-        <Area type="monotone" dataKey="avgPrice" stroke="#163A70" strokeWidth={2} fill="url(#priceGrad)" dot={{ r: 3, fill: "#163A70" }} />
-      </AreaChart>
+        <Line
+          name="挂牌均价"
+          type="monotone"
+          dataKey="avgPrice"
+          stroke="#163A70"
+          strokeWidth={2.6}
+          dot={{ r: 3, fill: "#163A70", strokeWidth: 0 }}
+          activeDot={{ r: 5, fill: "#E67E22", stroke: "#fff", strokeWidth: 2 }}
+          isAnimationActive={false}
+        />
+      </LineChart>
     </ResponsiveContainer>
   );
 }

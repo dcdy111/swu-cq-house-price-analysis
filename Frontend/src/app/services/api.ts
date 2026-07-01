@@ -185,7 +185,7 @@ export interface QualityOverview {
 
 export interface SourceLayer {
   source: string;
-  layer: "cold_start_baseline" | "new_standard_crawl";
+  layer: "real_source" | "legacy_archive" | "new_standard_crawl" | "cold_start_baseline";
   layer_label: string;
   sample_count: number;
   usable_count: number;
@@ -201,6 +201,15 @@ export interface SourceLayer {
 export interface QualityBucket {
   bucket: string;
   count: number;
+}
+
+export interface QualityDimensionScore {
+  key: "completeness" | "uniqueness" | "consistency" | "timeliness" | "validity" | "verifiability";
+  label: string;
+  score: number;
+  weight: number;
+  definition: string;
+  evidence: string;
 }
 
 export interface CleaningStep {
@@ -219,12 +228,7 @@ export interface QualityReport {
   overview: QualityOverview;
   source_layers: SourceLayer[];
   quality_buckets: QualityBucket[];
-  dimension_scores: {
-    key: "completeness" | "uniqueness" | "consistency" | "timeliness" | "validity" | "verifiability";
-    label: string;
-    score: number;
-    weight: number;
-  }[];
+  dimension_scores: QualityDimensionScore[];
   methodology: {
     framework: string;
     purpose: string;
@@ -331,12 +335,33 @@ export interface AgentSessionSummary {
   session_id: string;
   title: string;
   turn_count: number;
+  latest_turn_id?: string | null;
+  latest_question?: string | null;
+  latest_has_answer?: boolean;
+  latest_status?: string | null;
+  latest_answered_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
 
 export interface AgentSessionDetail extends AgentSessionSummary {
   turns: AgentTurn[];
+}
+
+export interface AgentStreamErrorPayload {
+  type: "error";
+  message: string;
+  status?: number;
+  data?: unknown;
+}
+
+export interface AgentChatStreamHandlers {
+  onSession?: (event: { session_id: string; turn_id: string; title: string }) => void;
+  onToolCall?: (event: AgentToolCall) => void;
+  onDelta?: (chunk: string) => void;
+  onReplace?: (content: string) => void;
+  onDone?: (data: AgentChatResponse) => void;
+  onError?: (error: AgentStreamErrorPayload) => void;
 }
 
 export interface DashboardKpis {
@@ -519,7 +544,7 @@ export interface LayoutDistributionResult {
   total: number;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+const API_BASE = "";
 const TOKEN_KEY = "swu-auth-token";
 const USER_KEY = "swu-auth-user";
 
@@ -577,7 +602,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const text = await response.text();
     const preview = text.trim().slice(0, 80).replace(/\s+/g, " ");
     throw new Error(
-      `后端接口返回非 JSON 响应(${response.status})。请确认 VITE_API_BASE_URL 或 Vite 代理指向当前 Flask 后端；响应预览: ${preview}`,
+      `后端接口返回非 JSON 响应(${response.status})。请确认当前页面访问的是 127.0.0.1:5173，且前端代理指向 127.0.0.1:5000；响应预览: ${preview}`,
     );
   }
   let payload: ApiEnvelope<T>;
@@ -596,6 +621,104 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw error;
   }
   return payload.data;
+}
+
+async function streamRequest(
+  path: string,
+  payload: Record<string, unknown>,
+  handlers: AgentChatStreamHandlers,
+): Promise<void> {
+  const token = getAuthToken();
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const contentType = response.headers.get("Content-Type") || "";
+  if (!response.ok || !contentType.toLowerCase().includes("text/event-stream")) {
+    const text = await response.text();
+    throw new Error(text || `流式请求失败: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("浏览器不支持当前流式响应");
+  }
+
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  const dispatchBlock = (block: string) => {
+    const lines = block.split(/\r?\n/);
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+    if (!dataLines.length) return;
+    const raw = dataLines.join("\n");
+    const parsed = JSON.parse(raw) as Record<string, any>;
+
+    if (eventName === "session") {
+      handlers.onSession?.({
+        session_id: String(parsed.session_id),
+        turn_id: String(parsed.turn_id),
+        title: String(parsed.title || ""),
+      });
+      return;
+    }
+    if (eventName === "tool_call") {
+      handlers.onToolCall?.(parsed.tool_call as AgentToolCall);
+      return;
+    }
+    if (eventName === "delta") {
+      handlers.onDelta?.(String(parsed.content || ""));
+      return;
+    }
+    if (eventName === "replace") {
+      handlers.onReplace?.(String(parsed.content || ""));
+      return;
+    }
+    if (eventName === "done") {
+      handlers.onDone?.(parsed.data as AgentChatResponse);
+      return;
+    }
+    if (eventName === "error") {
+      const error = parsed as AgentStreamErrorPayload;
+      handlers.onError?.(error);
+      const thrown = new Error(error.message) as Error & { data?: unknown; status?: number };
+      thrown.data = error.data;
+      thrown.status = error.status;
+      throw thrown;
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() || "";
+    for (const block of blocks) {
+      if (block.trim()) {
+        dispatchBlock(block);
+      }
+    }
+    if (done) {
+      if (buffer.trim()) {
+        dispatchBlock(buffer);
+      }
+      break;
+    }
+  }
 }
 
 export const api = {
@@ -710,6 +833,11 @@ export const api = {
   getLatestAnalysisJob() {
     return request<LatestAnalysisJob>("/api/analysis/jobs/latest");
   },
+  listAnalysisJobs(page = 1, pageSize = 20) {
+    return request<{ items: AnalysisJob[]; pagination: { page: number; page_size: number; total: number; pages: number } }>(
+      `/api/analysis/jobs?page=${page}&page_size=${pageSize}`,
+    );
+  },
   getLatestAnalysisResultsByType() {
     return request<LatestAnalysisByType>("/api/analysis/results/latest-by-type");
   },
@@ -722,6 +850,9 @@ export const api = {
   getAnalysisJob(jobId: number) {
     return request<AnalysisJob>(`/api/analysis/jobs/${jobId}`);
   },
+  streamAgentChat(payload: { session_id?: string; question: string }, handlers: AgentChatStreamHandlers) {
+    return streamRequest("/api/agent/chat/stream", payload, handlers);
+  },
   chatAgent(payload: { session_id?: string; question: string }) {
     return request<AgentChatResponse>("/api/agent/chat", {
       method: "POST",
@@ -731,8 +862,25 @@ export const api = {
   getAgentSessions(limit = 50) {
     return request<{ items: AgentSessionSummary[] }>(`/api/agent/sessions?limit=${limit}`);
   },
+  createAgentSession(payload?: { title?: string }) {
+    return request<AgentSessionSummary>("/api/agent/sessions", {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
+    });
+  },
   getAgentSession(sessionId: string) {
     return request<AgentSessionDetail>(`/api/agent/sessions/${encodeURIComponent(sessionId)}`);
+  },
+  renameAgentSession(sessionId: string, title: string) {
+    return request<AgentSessionSummary>(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
+  },
+  deleteAgentSession(sessionId: string) {
+    return request<{ session_id: string; deleted: boolean }>(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
   },
   getReport(reportId: number) {
     return request<GeneratedReport>(`/api/reports/${reportId}`);
@@ -745,4 +893,8 @@ export function listingsExportUrl(params: Record<string, string | number | undef
 
 export function reportPdfUrl(reportId: number) {
   return `${API_BASE}/api/reports/${reportId}/export.pdf${toQuery({ access_token: getAuthToken() })}`;
+}
+
+export function analysisJobPdfUrl(jobId: number) {
+  return `${API_BASE}/api/analysis/jobs/${jobId}/export.pdf${toQuery({ access_token: getAuthToken() })}`;
 }

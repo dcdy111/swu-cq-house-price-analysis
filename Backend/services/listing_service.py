@@ -13,9 +13,29 @@ from sqlalchemy import or_
 from Backend.extensions import db
 from Backend.models.listing import Listing
 from Backend.models.snapshot import ListingSnapshot
+from Backend.services.dashboard_service import normalize_district_name
 
 
 CURRENT_YEAR = datetime.now().year
+LIANGJIANG_NEW_AREA = "两江新区"
+LIANGJIANG_DISTRICT_ALIASES = (
+    LIANGJIANG_NEW_AREA,
+    "渝北",
+    "渝北区",
+    "江北",
+    "江北区",
+)
+
+DISPLAY_DISTRICT_ALIASES = {
+    "nanan": "南岸区",
+    "nanana": "南岸区",
+    "nan'an": "南岸区",
+    "dianjiang": "垫江县",
+    "dianjiangxian": "垫江县",
+    "dainjiangxian": "垫江县",
+    "wansheng": "万盛",
+    "万盛经开区": "万盛",
+}
 
 
 def parse_float(value: Any) -> float | None:
@@ -52,6 +72,92 @@ def clean_text(value: Any, limit: int | None = None) -> str | None:
         return None
     if limit and len(text) > limit:
         return text[:limit]
+    return text
+
+
+# 房天下 a058 板块在页面入口上会出现“江北/两江新区”两种写法，
+# 这里统一收束为“两江新区”，避免同一板块在入库和分析阶段被拆成两个口径。
+FANG_A058_DISTRICT_CANONICAL = {
+    "江北": "两江新区",
+    "两江新区": "两江新区",
+}
+
+
+def canonicalize_display_district(value: Any) -> str:
+    text = clean_text(value, 64) or "待复核"
+    text = DISPLAY_DISTRICT_ALIASES.get(text.lower(), DISPLAY_DISTRICT_ALIASES.get(text, text))
+    normalized = normalize_district_name(text)
+    if normalized != text:
+        text = normalized
+    if text in LIANGJIANG_DISTRICT_ALIASES:
+        return LIANGJIANG_NEW_AREA
+    return text
+
+
+def expand_district_filter_values(value: Any) -> list[str]:
+    text = clean_text(value, 64)
+    if not text:
+        return []
+    text = DISPLAY_DISTRICT_ALIASES.get(text.lower(), DISPLAY_DISTRICT_ALIASES.get(text, text))
+    if text in LIANGJIANG_DISTRICT_ALIASES:
+        return list(LIANGJIANG_DISTRICT_ALIASES)
+    normalized = normalize_district_name(text)
+    values = [text]
+    if normalized and normalized not in values:
+        values.append(normalized)
+    if normalized.endswith("区") and normalized[:-1] not in values:
+        values.append(normalized[:-1])
+    if normalized.endswith("县") and normalized[:-1] not in values:
+        values.append(normalized[:-1])
+    return values
+
+
+def normalize_source_district(source: str | None, district: Any) -> str:
+    text = clean_text(district, 64) or "待复核"
+    if str(source or "").strip() == "fang":
+        return FANG_A058_DISTRICT_CANONICAL.get(text, text)
+    return text
+
+
+def normalize_listing_address(
+    source: str | None,
+    district: str | None,
+    community: str | None,
+    address: Any,
+    title: str | None = None,
+) -> str | None:
+    text = clean_text(address, 255)
+    if not text:
+        if community and district:
+            return clean_text(f"{district} {community}", 255) or clean_text(community, 255) or clean_text(district, 255)
+        return clean_text(community, 255) or clean_text(district, 255) or "待复核"
+
+    source_key = str(source or "").strip()
+    contaminated_markers = (
+        "元/㎡",
+        "元/平",
+        "万",
+        "㎡",
+        "VR看房",
+        "经纪人力荐",
+        "房东直卖",
+        "满五年",
+        "近地铁",
+        "电梯房",
+    )
+    looks_contaminated = len(text) > 80 or any(marker in text for marker in contaminated_markers)
+    if source_key == "anjuke_mobile" and looks_contaminated:
+        fallback_parts = [clean_text(district, 64), clean_text(community, 128)]
+        fallback = " ".join(part for part in fallback_parts if part)
+        if fallback:
+            return fallback
+        return "待复核"
+    if title and clean_text(title, 255) and clean_text(title, 255) in text and looks_contaminated:
+        fallback_parts = [clean_text(district, 64), clean_text(community, 128)]
+        fallback = " ".join(part for part in fallback_parts if part)
+        if fallback:
+            return fallback
+        return "待复核"
     return text
 
 
@@ -228,12 +334,44 @@ def quality_dimensions(raw: dict) -> dict[str, float]:
 
 class ListingService:
     @staticmethod
+    def listing_options() -> dict:
+        districts = [
+            row[0]
+            for row in db.session.query(Listing.district)
+            .filter(Listing.district.isnot(None))
+            .distinct()
+            .order_by(Listing.district.asc())
+            .all()
+        ]
+        sources = [
+            row[0]
+            for row in db.session.query(Listing.source)
+            .filter(Listing.source.isnot(None))
+            .distinct()
+            .order_by(Listing.source.asc())
+            .all()
+        ]
+
+        normalized_districts: list[str] = []
+        seen: set[str] = set()
+        for district in districts:
+            label = canonicalize_display_district(district)
+            if label in seen:
+                continue
+            seen.add(label)
+            normalized_districts.append(label)
+
+        return {"districts": normalized_districts, "sources": sources}
+
+    @staticmethod
     def recommend_for_buyer(params: dict) -> dict:
         budget_max = parse_float(params.get("budget_max"))
         budget_min = parse_float(params.get("budget_min"))
         area_min = parse_float(params.get("area_min"))
         area_max = parse_float(params.get("area_max"))
         district = clean_text(params.get("district"), 64)
+        district_label = canonicalize_display_district(district) if district else None
+        district_values = expand_district_filter_values(district)
         keyword = clean_text(params.get("keyword"), 64)
         prefer_metro = bool(params.get("prefer_metro"))
         commute_mode = clean_text(params.get("commute_mode"), 32) or ("metro_priority" if prefer_metro else "balanced")
@@ -258,7 +396,7 @@ class ListingService:
         if area_max is not None:
             query = query.filter(Listing.area <= area_max)
         if district and district not in {"全部区县", "all"}:
-            query = query.filter(Listing.district == district)
+            query = query.filter(Listing.district.in_(district_values or [district]))
         if keyword:
             like = f"%{keyword}%"
             query = query.filter(
@@ -278,7 +416,7 @@ class ListingService:
                     "budget_max": budget_max,
                     "area_min": area_min,
                     "area_max": area_max,
-                    "district": district,
+                    "district": district_label,
                     "prefer_metro": prefer_metro,
                     "commute_mode": commute_mode,
                     "keyword": keyword,
@@ -394,7 +532,7 @@ class ListingService:
                 "budget_max": budget_max,
                 "area_min": area_min,
                 "area_max": area_max,
-                "district": district,
+                "district": district_label,
                 "prefer_metro": prefer_metro,
                 "commute_mode": commute_mode,
                 "keyword": keyword,
@@ -411,16 +549,19 @@ class ListingService:
     @staticmethod
     def query_listings(params: dict) -> dict:
         page = max(1, int(params.get("page", 1)))
-        page_size = min(100, max(1, int(params.get("page_size", 20))))
+        page_size_raw = int(params.get("page_size", 20))
+        # CSV 导出场景允许一次性拉较大批量，UI 列表保持 100 上限。
+        page_size = min(10000 if params.get("export_mode") else 100, max(1, page_size_raw))
 
         query = Listing.query
-        district = params.get("district")
+        district = clean_text(params.get("district"), 64)
+        district_values = expand_district_filter_values(district)
         source = params.get("source")
         status = params.get("status")
         keyword = params.get("keyword")
 
         if district and district not in {"全部区县", "all"}:
-            query = query.filter(Listing.district == district)
+            query = query.filter(Listing.district.in_(district_values or [district]))
         if source and source not in {"全部来源", "all"}:
             query = query.filter(Listing.source == source)
         if status and status not in {"全部状态", "all"}:
@@ -449,7 +590,7 @@ class ListingService:
                 )
             )
 
-        pagination = query.order_by(Listing.updated_at.desc(), Listing.id.desc()).paginate(
+        pagination = query.order_by(Listing.id.asc()).paginate(
             page=page, per_page=page_size, error_out=False
         )
         return {
@@ -479,24 +620,27 @@ class ListingService:
         if not title or not link:
             raise ValueError("title/link 不能为空")
 
-        total_price = parse_float(raw.get("total_price"))
-        unit_price = parse_float(raw.get("unit_price"))
-        area = parse_float(raw.get("area"))
-        build_year = parse_int(raw.get("build_year"))
-        layout = clean_text(raw.get("layout"), 64)
+        district = normalize_source_district(source, raw.get("district"))
+        normalized_raw = {**raw, "district": district}
+
+        total_price = parse_float(normalized_raw.get("total_price"))
+        unit_price = parse_float(normalized_raw.get("unit_price"))
+        area = parse_float(normalized_raw.get("area"))
+        build_year = parse_int(normalized_raw.get("build_year"))
+        layout = clean_text(normalized_raw.get("layout"), 64)
         rooms, halls = parse_rooms_halls(layout)
-        floor_text = clean_text(raw.get("floor_text") or raw.get("floor"), 128)
-        tags = raw.get("tags") or []
+        floor_text = clean_text(normalized_raw.get("floor_text") or normalized_raw.get("floor"), 128)
+        tags = normalized_raw.get("tags") or []
         # 结构增强字段只接受爬虫明确解析出的值；未知就保留为空。
         # 不从标题、地址、标签二次推断，避免把后处理猜测写成真实采集字段。
-        total_floors = parse_int(raw.get("total_floors"))
-        metro_distance = parse_int(raw.get("metro_distance"))
-        building_type = clean_text(raw.get("building_type"), 64)
-        has_elevator = parse_bool(raw.get("has_elevator"))
-        fingerprint = raw.get("fingerprint") or build_fingerprint(raw)
+        total_floors = parse_int(normalized_raw.get("total_floors"))
+        metro_distance = parse_int(normalized_raw.get("metro_distance"))
+        building_type = clean_text(normalized_raw.get("building_type"), 64)
+        has_elevator = parse_bool(normalized_raw.get("has_elevator"))
+        fingerprint = normalized_raw.get("fingerprint") or build_fingerprint(normalized_raw)
         house_age = CURRENT_YEAR - build_year if build_year else None
-        score = quality_score(raw)
-        status = raw.get("status") or ("active" if score >= 60 else "abnormal")
+        score = quality_score(normalized_raw)
+        status = normalized_raw.get("status") or ("active" if score >= 60 else "abnormal")
 
         listing = Listing.query.filter_by(source=source, fingerprint=fingerprint).first()
         if listing is None:
@@ -524,17 +668,23 @@ class ListingService:
         listing.source_listing_id = clean_text(raw.get("source_listing_id"), 128)
         listing.title = title
         listing.link = link
-        listing.district = clean_text(raw.get("district"), 64) or "待复核"
-        listing.community = clean_text(raw.get("community"), 128)
-        listing.address = clean_text(raw.get("address"), 255)
+        listing.district = district
+        listing.community = clean_text(normalized_raw.get("community"), 128)
+        listing.address = normalize_listing_address(
+            source,
+            listing.district,
+            listing.community,
+            normalized_raw.get("address"),
+            title=listing.title,
+        )
         listing.total_price = total_price
         listing.unit_price = unit_price
         listing.area = area
         listing.layout = layout
         listing.rooms = rooms
         listing.halls = halls
-        listing.orientation = clean_text(raw.get("orientation"), 64)
-        listing.decoration = clean_text(raw.get("decoration"), 64)
+        listing.orientation = clean_text(normalized_raw.get("orientation"), 64)
+        listing.decoration = clean_text(normalized_raw.get("decoration"), 64)
         listing.floor_text = floor_text
         listing.floor_level = normalize_floor_level(floor_text)
         listing.total_floors = total_floors if total_floors is not None else listing.total_floors
@@ -568,23 +718,33 @@ class ListingService:
 
     @staticmethod
     def export_csv(params: dict) -> str:
-        result = ListingService.query_listings({**params, "page": 1, "page_size": 100})
+        export_params = {**params, "page": 1, "page_size": 10000, "export_mode": "1"}
+        result = ListingService.query_listings(export_params)
+        items = result.get("items", [])
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["ID", "来源", "标题", "区县", "小区", "总价(万)", "单价(元/㎡)", "面积(㎡)", "户型", "链接"])
-        for item in result["items"]:
+        # 列顺序与前端 ListingsPage 表格一致：ID、房源标题、区县、户型、面积、总价、单价、来源、质量分、状态、最近采集。
+        # 第二行标题为参考用主键，二级标题保留原始字段。
+        writer.writerow([
+            "系统ID", "房源标题", "区县", "户型", "面积(㎡)",
+            "总价(万)", "单价(元/㎡)", "来源", "质量分", "状态", "最近采集", "小区", "链接",
+        ])
+        for item in items:
             writer.writerow(
                 [
                     item["id"],
-                    item["source"],
                     item["title"],
                     item["district"],
-                    item["community"] or "",
+                    item["layout"] or "",
+                    item["area"] or "",
                     item["total_price"] or "",
                     item["unit_price"] or "",
-                    item["area"] or "",
-                    item["layout"] or "",
-                    item["link"],
+                    item["source"],
+                    item["data_quality_score"],
+                    item["status"],
+                    item.get("last_seen_at") or item.get("updated_at") or "",
+                    item.get("community") or "",
+                    item.get("link") or "",
                 ]
             )
         return output.getvalue()
