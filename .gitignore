@@ -11,6 +11,7 @@ __pycache__/
 .playwright-run/
 output/playwright/
 output/full_test/
+output/agent*
 output/settings-nav-*.png
 test_screenshots/
 test-results/
@@ -27,6 +28,7 @@ node_modules/
 /package-lock.json
 /package.json
 /quick-test.js
+/test-agent*.js
 data/cookies/
 Frontend/node_modules/
 Frontend/dist/
