@@ -26,6 +26,7 @@ instance/
 node_modules/
 /package-lock.json
 /package.json
+/quick-test.js
 data/cookies/
 Frontend/node_modules/
 Frontend/dist/
