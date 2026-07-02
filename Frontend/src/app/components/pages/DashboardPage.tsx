@@ -13,6 +13,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { Button } from "../ui/button";
+import { DistrictHoverSelect } from "../common/DistrictHoverSelect";
 import { KpiCard } from "../common/KpiCard";
 import { SectionCard } from "../common/SectionCard";
 import { StatusTag } from "../common/StatusTag";
@@ -276,6 +277,37 @@ export function DashboardPage() {
   const schedulerSource = sourceLabel(scheduler?.incremental_crawl_source || "fang");
   const schedulerDistricts = schedulerDistrictLabel(scheduler?.incremental_crawl_districts);
 
+  const districtOptions = useMemo(
+    () => [...mapData].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
+    [mapData]
+  );
+
+  const handleDistrictSelect = (value: string) => {
+    if (value === "__none__") {
+      setSelectedDistrict(null);
+      return;
+    }
+    const district = mapData.find(item => item.name === value);
+    setSelectedDistrict(district ?? null);
+  };
+
+  const districtStatCards = [
+    [
+      "挂牌均价",
+      selectedDistrict ? `${fmt(selectedDistrict.avgPrice)} 元/㎡` : `${fmt(kpis?.avg_unit_price)} 元/㎡`,
+    ],
+    [
+      "采集样本",
+      selectedDistrict ? `${fmt(selectedDistrict.count)} 套` : `${fmt(kpis?.total_count)} 套`,
+    ],
+    [
+      "质量分",
+      selectedDistrict
+        ? `${fmt(selectedDistrict.quality, 1)} 分`
+        : `${fmt(kpis?.avg_quality, 1)} 分`,
+    ],
+  ] as const;
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
@@ -370,24 +402,13 @@ export function DashboardPage() {
               : "如需使用高德 JS API，在 Frontend/.env.local 配置 VITE_AMAP_WEB_KEY 后重启前端。"}
           </div>
         )}
-        <div className="mt-4 grid grid-cols-2 xl:grid-cols-4 gap-3">
-          {[
-            ["选中区县", selectedDistrict?.name ?? "未选中"],
-            [
-              "挂牌均价",
-              selectedDistrict ? `${fmt(selectedDistrict.avgPrice)} 元/㎡` : `${fmt(kpis?.avg_unit_price)} 元/㎡`,
-            ],
-            [
-              "采集样本",
-              selectedDistrict ? `${fmt(selectedDistrict.count)} 套` : `${fmt(kpis?.total_count)} 套`,
-            ],
-            [
-              "质量分",
-              selectedDistrict
-                ? `${fmt(selectedDistrict.quality, 1)} 分`
-                : `${fmt(kpis?.avg_quality, 1)} 分`,
-            ],
-          ].map(([label, value]) => (
+        <div className="relative mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <DistrictHoverSelect
+            value={selectedDistrict?.name ?? null}
+            options={districtOptions}
+            onChange={handleDistrictSelect}
+          />
+          {districtStatCards.map(([label, value]) => (
             <div
               key={label}
               className="rounded-lg px-3 py-3"
