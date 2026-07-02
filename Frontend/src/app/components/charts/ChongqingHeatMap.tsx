@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 import type { EChartsOption } from "echarts";
 
@@ -65,6 +65,7 @@ const AMAP_LOADER_URL = "https://webapi.amap.com/loader.js";
 const GEOJSON_URL = "/geo/chongqing.json";
 const CHONGQING_CENTER: [number, number] = [107.76, 29.68];
 const MAP_COLORS = ["#DBEAFE", "#93C5FD", "#3B82F6", "#1D4ED8", "#1E3A8A"];
+const MAP_VIEW_ANIM_MS = 680;
 
 const METRIC_META: Record<
   ChongqingMapMetric,
@@ -140,6 +141,55 @@ function formatMetric(value: number, metric: ChongqingMapMetric) {
 
 function shortDistrictName(name: string) {
   return DISTRICT_SHORT_LABELS[name] ?? name.replace(/土家族苗族自治县|苗族土家族自治县|土家族自治县/g, "").replace(/[区县]$/, "");
+}
+
+/** 快启慢停，比线性更丝滑，又不会像 cubicInOut 那样两头都拖沓 */
+function easeOutCubic(t: number) {
+  return 1 - (1 - t) ** 3;
+}
+
+function startSmoothMapView(
+  map: any,
+  targetZoom: number,
+  targetCenter: [number, number],
+  duration = MAP_VIEW_ANIM_MS,
+): () => void {
+  let frameId: number | null = null;
+
+  const cancel = () => {
+    if (frameId !== null) {
+      cancelAnimationFrame(frameId);
+      frameId = null;
+    }
+  };
+
+  if (!map?.getZoom || !map?.getCenter) {
+    map?.setZoomAndCenter?.(targetZoom, targetCenter, false, duration);
+    return cancel;
+  }
+
+  const startZoom = Number(map.getZoom());
+  const startCenter = map.getCenter();
+  const startLng = Number(startCenter?.lng ?? targetCenter[0]);
+  const startLat = Number(startCenter?.lat ?? targetCenter[1]);
+  const startedAt = performance.now();
+
+  const step = (now: number) => {
+    const raw = Math.min(1, (now - startedAt) / duration);
+    const progress = easeOutCubic(raw);
+    const lng = startLng + (targetCenter[0] - startLng) * progress;
+    const lat = startLat + (targetCenter[1] - startLat) * progress;
+    const zoom = startZoom + (targetZoom - startZoom) * progress;
+    map.setZoomAndCenter?.(zoom, [lng, lat], true);
+    if (progress < 1) {
+      frameId = requestAnimationFrame(step);
+    } else {
+      frameId = null;
+    }
+  };
+
+  frameId = requestAnimationFrame(step);
+  return cancel;
 }
 
 function buildTooltip(
@@ -336,6 +386,8 @@ export function ChongqingHeatMap({
   const amapSelectionMarkerRef = useRef<any>(null);
   const geoJsonRef = useRef<GeoJsonData | null>(null);
   const didFitViewRef = useRef(false);
+  const prevSelectedDistrictRef = useRef<string | null>(null);
+  const amapViewAnimCancelRef = useRef<(() => void) | null>(null);
 
   const [activeBackend, setActiveBackend] = useState<ChongqingMapBackend>(AMAP_KEY ? "amap" : "geojson");
   const [mapReady, setMapReady] = useState(false);
@@ -644,6 +696,17 @@ export function ChongqingHeatMap({
       marker.setMap(map);
       amapSelectionMarkerRef.current = marker;
     }
+
+    if (selectedDistrict !== prevSelectedDistrictRef.current) {
+      amapViewAnimCancelRef.current?.();
+      if (selectedDistrict && districtCenters[selectedDistrict]) {
+        const center = districtCenters[selectedDistrict];
+        amapViewAnimCancelRef.current = startSmoothMapView(map, 8.2, center, MAP_VIEW_ANIM_MS);
+      } else if (prevSelectedDistrictRef.current) {
+        amapViewAnimCancelRef.current = startSmoothMapView(map, 7.4, CHONGQING_CENTER, MAP_VIEW_ANIM_MS);
+      }
+      prevSelectedDistrictRef.current = selectedDistrict ?? null;
+    }
   }, [
     activeBackend,
     districtByName,
@@ -679,6 +742,7 @@ export function ChongqingHeatMap({
         map: "chongqing",
         roam: true,
         zoom: 1.1,
+        center: CHONGQING_CENTER,
         scaleLimit: { min: 1, max: 8 },
         top: 16,
         bottom: 48,
@@ -719,6 +783,7 @@ export function ChongqingHeatMap({
           roam: true,
           scaleLimit: { min: 1, max: 8 },
           zoom: 1.1,
+          center: CHONGQING_CENTER,
           top: 16,
           bottom: 48,
           left: 8,
@@ -812,28 +877,72 @@ export function ChongqingHeatMap({
       ],
     };
 
-    chart.setOption(option, true);
+    chart.setOption(option);
     if (selectedDistrict) {
       chart.dispatchAction({ type: "select", name: selectedDistrict });
     }
-
-    chart.off("click");
-    chart.on("click", params => {
-      const district = districtByName.get(params.name);
-      onSelectDistrict?.(district ?? null);
-    });
   }, [
     activeBackend,
     chartData,
     districtByName,
     mapReady,
     metric,
-    onSelectDistrict,
     selectedDistrict,
     selectedMarkerData,
     valueRange.max,
     valueRange.min,
   ]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !mapReady || activeBackend !== "geojson") return;
+    if (selectedDistrict === prevSelectedDistrictRef.current) return;
+
+    const focusCenter = selectedDistrict && districtCenters[selectedDistrict]
+      ? districtCenters[selectedDistrict]
+      : CHONGQING_CENTER;
+    const focusZoom = selectedDistrict ? 2.8 : 1.1;
+
+    chart.setOption({
+      geo: {
+        center: focusCenter,
+        zoom: focusZoom,
+        animationDurationUpdate: MAP_VIEW_ANIM_MS,
+        animationEasingUpdate: "cubicOut",
+      },
+      series: [
+        {
+          center: focusCenter,
+          zoom: focusZoom,
+          animationDurationUpdate: MAP_VIEW_ANIM_MS,
+          animationEasingUpdate: "cubicOut",
+        },
+        {
+          animationDurationUpdate: MAP_VIEW_ANIM_MS,
+          animationEasingUpdate: "cubicOut",
+        },
+      ],
+    });
+
+    if (selectedDistrict) {
+      chart.dispatchAction({ type: "select", name: selectedDistrict });
+    } else if (prevSelectedDistrictRef.current) {
+      chart.dispatchAction({ type: "unselect", name: prevSelectedDistrictRef.current });
+    }
+
+    prevSelectedDistrictRef.current = selectedDistrict ?? null;
+  }, [activeBackend, districtCenters, mapReady, selectedDistrict]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !mapReady || activeBackend !== "geojson") return;
+
+    chart.off("click");
+    chart.on("click", params => {
+      const district = districtByName.get(params.name);
+      onSelectDistrict?.(district ?? null);
+    });
+  }, [activeBackend, districtByName, mapReady, onSelectDistrict]);
 
   const meta = METRIC_META[metric];
 
