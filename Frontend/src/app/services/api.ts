@@ -166,6 +166,23 @@ export interface SystemSettings {
   };
 }
 
+export interface SchedulerJobInfo {
+  id: string;
+  name: string;
+  next_run_time?: string | null;
+  trigger: string;
+}
+
+export interface SchedulerStatusData {
+  enabled: boolean;
+  running: boolean;
+  lock_held?: boolean;
+  lock_owner_pid?: number | null;
+  note?: string;
+  jobs: SchedulerJobInfo[];
+  settings: SystemSettings["scheduler"];
+}
+
 export interface QualityOverview {
   total_count: number;
   distinct_fingerprint: number;
@@ -257,6 +274,7 @@ export interface AnalysisResult {
 
 export interface AnalysisJob {
   id: number;
+  name: string;
   job_type: string;
   status: string;
   sample_count: number;
@@ -278,6 +296,68 @@ export interface LatestAnalysisJob {
 export interface LatestAnalysisByType extends LatestAnalysisJob {
   jobs_by_type: Record<string, Omit<AnalysisJob, "results">>;
   note?: string;
+}
+
+export interface AnalysisSimulationRequest {
+  district: string;
+  community?: string;
+  source?: string;
+  area: number;
+  rooms: number;
+  halls: number;
+  floor_level?: "low" | "mid" | "high" | "unknown";
+  orientation?: string;
+  decoration?: string;
+  build_year?: number;
+  house_age?: number;
+  unit_price?: number;
+  total_price?: number;
+  max_samples?: number;
+}
+
+export interface AnalysisSimulationResult {
+  input: Record<string, any>;
+  regression: {
+    model_name: string;
+    estimated_unit_price: number;
+    estimated_total_price: number;
+    price_note: string;
+    top_factors: { feature: string; importance: number; note: string }[];
+    feature_importance: { feature: string; importance: number }[];
+    cluster_basis: {
+      unit_price: number;
+      total_price: number;
+      used_observed_price: boolean;
+    };
+  };
+  cluster: {
+    label: string;
+    cluster?: number;
+    cluster_count: number;
+    algorithm: string;
+    silhouette_score?: number | null;
+    assigned_center?: Record<string, any>;
+    profile?: Record<string, any>;
+    note?: string;
+  };
+  comparables: Array<{
+    id: number;
+    title: string;
+    district: string;
+    area: number;
+    unit_price: number;
+    total_price: number;
+    layout?: string;
+  }>;
+  district_reference: {
+    district: string;
+    listing_count: number;
+    avg_unit_price?: number | null;
+    p25_unit_price?: number | null;
+    median_unit_price?: number | null;
+    p75_unit_price?: number | null;
+  };
+  evidence: Record<string, any>;
 }
 
 export interface AgentToolCall {
@@ -781,8 +861,8 @@ export const api = {
   getCrawlSources() {
     return request<{ items: CrawlSource[] }>("/api/crawl/sources");
   },
-  getCrawlTasks() {
-    return request<CrawlTaskList>("/api/crawl/tasks");
+  getCrawlTasks(page = 1, pageSize = 20) {
+    return request<CrawlTaskList>(`/api/crawl/tasks?page=${page}&page_size=${pageSize}`);
   },
   getCrawlTask(taskId: number) {
     return request<CrawlTask>(`/api/crawl/tasks/${taskId}`);
@@ -795,6 +875,7 @@ export const api = {
     max_workers: number;
     mode: string;
     run_now?: boolean;
+    background?: boolean;
   }) {
     return request<CrawlTask>("/api/crawl/tasks", {
       method: "POST",
@@ -809,6 +890,7 @@ export const api = {
     max_workers: number;
     mode: string;
     run_now?: boolean;
+    background?: boolean;
   }) {
     return request<CrawlTask>(`/api/crawl/tasks/${taskId}`, {
       method: "PUT",
@@ -818,8 +900,11 @@ export const api = {
   deleteCrawlTask(taskId: number) {
     return request<{ id: number; deleted: boolean }>(`/api/crawl/tasks/${taskId}`, { method: "DELETE" });
   },
-  runCrawlTask(taskId: number) {
-    return request<CrawlTask>(`/api/crawl/tasks/${taskId}/run`, { method: "POST" });
+  runCrawlTask(taskId: number, payload?: { background?: boolean }) {
+    return request<CrawlTask>(`/api/crawl/tasks/${taskId}/run`, {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
+    });
   },
   cancelCrawlTask(taskId: number) {
     return request<CrawlTask>(`/api/crawl/tasks/${taskId}/cancel`, { method: "POST" });
@@ -829,6 +914,9 @@ export const api = {
   },
   getQualityReport() {
     return request<QualityReport>("/api/quality/report");
+  },
+  getSchedulerStatus() {
+    return request<SchedulerStatusData>("/api/scheduler/status");
   },
   getLatestAnalysisJob() {
     return request<LatestAnalysisJob>("/api/analysis/jobs/latest");
@@ -841,7 +929,12 @@ export const api = {
   getLatestAnalysisResultsByType() {
     return request<LatestAnalysisByType>("/api/analysis/results/latest-by-type");
   },
-  createAnalysisJob(payload: { job_type: "all" | "eda" | "regression" | "tune" | "cluster" | "anomaly"; max_samples?: number }) {
+  createAnalysisJob(payload: {
+    name?: string;
+    job_type: "all" | "eda" | "regression" | "tune" | "cluster" | "anomaly";
+    max_samples?: number;
+    background?: boolean;
+  }) {
     return request<AnalysisJob>("/api/analysis/jobs", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -849,6 +942,29 @@ export const api = {
   },
   getAnalysisJob(jobId: number) {
     return request<AnalysisJob>(`/api/analysis/jobs/${jobId}`);
+  },
+  renameAnalysisJob(jobId: number, name: string) {
+    return request<AnalysisJob>(`/api/analysis/jobs/${jobId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  },
+  deleteAnalysisJob(jobId: number) {
+    return request<{ id: number; deleted: boolean }>(`/api/analysis/jobs/${jobId}`, {
+      method: "DELETE",
+    });
+  },
+  replayAnalysisJob(jobId: number, payload?: { name?: string; max_samples?: number; background?: boolean }) {
+    return request<AnalysisJob>(`/api/analysis/jobs/${jobId}/replay`, {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
+    });
+  },
+  simulateAnalysis(payload: AnalysisSimulationRequest) {
+    return request<AnalysisSimulationResult>("/api/analysis/simulate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   streamAgentChat(payload: { session_id?: string; question: string }, handlers: AgentChatStreamHandlers) {
     return streamRequest("/api/agent/chat/stream", payload, handlers);

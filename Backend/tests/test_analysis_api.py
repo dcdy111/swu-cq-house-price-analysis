@@ -108,6 +108,27 @@ def test_create_analysis_job_generates_all_result_types(client):
     assert ModelResult.query.count() == len(data["results"])
 
 
+def test_create_analysis_job_can_dispatch_in_background(client, monkeypatch):
+    seed_analysis_data()
+    captured = {}
+
+    def fake_submit(job_key, func, *args, **kwargs):
+        captured["job_key"] = job_key
+        captured["args"] = args
+        return True
+
+    monkeypatch.setattr("Backend.api.analysis.TaskRunner.submit", fake_submit)
+
+    response = client.post("/api/analysis/jobs", json={"job_type": "all", "max_samples": 500, "background": True})
+    payload = response.get_json()
+
+    assert response.status_code == 202
+    assert payload["code"] == 0
+    assert payload["data"]["status"] == "pending"
+    assert payload["data"]["results"] == []
+    assert captured["job_key"].startswith("analysis:")
+
+
 def test_get_analysis_job_and_latest(client):
     seed_analysis_data()
     created = client.post("/api/analysis/jobs", json={"job_type": "regression"}).get_json()["data"]
@@ -123,6 +144,76 @@ def test_get_analysis_job_and_latest(client):
     assert latest_payload["code"] == 0
     assert latest_payload["data"]["job"]["id"] == created["id"]
     assert latest_payload["data"]["results"][0]["result_type"] == "regression"
+
+
+def test_analysis_job_history_crud_and_replay(client):
+    seed_analysis_data()
+
+    created = client.post("/api/analysis/jobs", json={"job_type": "regression", "name": "首轮挂牌价回归"}).get_json()["data"]
+
+    assert created["name"] == "首轮挂牌价回归"
+
+    rename_response = client.patch(f"/api/analysis/jobs/{created['id']}", json={"name": "答辩展示回归"})
+    rename_payload = rename_response.get_json()
+
+    assert rename_response.status_code == 200
+    assert rename_payload["code"] == 0
+    assert rename_payload["data"]["name"] == "答辩展示回归"
+
+    replay_response = client.post(
+        f"/api/analysis/jobs/{created['id']}/replay",
+        json={"name": "答辩展示回归-重跑", "max_samples": 500},
+    )
+    replay_payload = replay_response.get_json()
+
+    assert replay_response.status_code == 201
+    assert replay_payload["code"] == 0
+    assert replay_payload["data"]["id"] != created["id"]
+    assert replay_payload["data"]["job_type"] == "regression"
+    assert replay_payload["data"]["name"] == "答辩展示回归-重跑"
+    assert replay_payload["data"]["results"][0]["result_type"] == "regression"
+
+    delete_response = client.delete(f"/api/analysis/jobs/{created['id']}")
+    delete_payload = delete_response.get_json()
+
+    assert delete_response.status_code == 200
+    assert delete_payload["code"] == 0
+    assert delete_payload["data"]["deleted"] is True
+    assert db.session.get(AnalysisJob, created["id"]) is None
+
+
+def test_analysis_simulation_returns_estimate_cluster_and_comparables(client):
+    seed_analysis_data()
+
+    response = client.post(
+        "/api/analysis/simulate",
+        json={
+            "district": "渝北",
+            "community": "样本小区A",
+            "source": "fang",
+            "area": 92,
+            "rooms": 2,
+            "halls": 1,
+            "floor_level": "mid",
+            "orientation": "南北",
+            "decoration": "精装",
+            "build_year": 2018,
+        },
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["code"] == 0
+    data = payload["data"]
+    assert data["input"]["district"] in {"渝北", "渝北区"}
+    assert data["regression"]["estimated_unit_price"] > 0
+    assert data["regression"]["estimated_total_price"] > 0
+    assert data["regression"]["top_factors"]
+    assert "挂牌价/报价辅助估计" in data["evidence"]["model_note"]
+    assert data["cluster"]["label"]
+    assert data["cluster"]["cluster_count"] >= 2
+    assert data["district_reference"]["listing_count"] >= 1
+    assert len(data["comparables"]) >= 1
 
 
 def test_analysis_job_pdf_export(client):

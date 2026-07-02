@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, request
 from Backend.services.crawl_service import CrawlService
 from Backend.services.quality_service import QualityService
 from Backend.services.settings_service import SettingsService
+from Backend.services.task_runner import TaskRunner
 from Backend.tasks.scheduler import _resolve_incremental_districts
 from Backend.tasks.scheduler import scheduler_status
 from Backend.utils.response import api_error, api_success
@@ -43,6 +44,13 @@ def run_incremental_crawl():
             }
         )
         if payload.get("run_now", True):
+            if payload.get("background"):
+                submitted = TaskRunner.submit(f"crawl:{task.id}", CrawlService.run_task, task.id, app=current_app._get_current_object())
+                if not submitted:
+                    return api_error("任务已在后台执行，请稍后刷新状态", status_code=409)
+                CrawlService.add_log(task.id, "INFO", "任务已提交到后台执行队列")
+                task = CrawlService.get_task(task.id, include_logs=True)
+                return api_success(task.to_dict(include_logs=True), status_code=202)
             task = CrawlService.run_task(task.id)
         return api_success(task.to_dict(include_logs=True), status_code=201)
     except ValueError as exc:

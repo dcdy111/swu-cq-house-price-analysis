@@ -261,6 +261,37 @@ function initialPayload(prefillDistrict?: string | null): CreatePayload {
   };
 }
 
+function taskSummaryMetrics(task: CrawlTask) {
+  const evidence = task.evidence || {};
+  const hasBeforeAfter = evidence.before_listing_count !== undefined || evidence.after_listing_count !== undefined;
+  if (hasBeforeAfter) {
+    return [
+      ["前房源数", evidence.before_listing_count],
+      ["后房源数", evidence.after_listing_count],
+      ["新增快照", evidence.new_snapshot_count ?? task.snapshot_count],
+      ["失败页", evidence.failed_pages ?? task.failed_pages],
+    ] as const;
+  }
+  return [
+    ["采集房源", evidence.total_found ?? task.total_found],
+    ["新增房源", evidence.inserted_count ?? task.inserted_count],
+    ["价格变化", evidence.updated_count ?? task.updated_count],
+    ["失败页", evidence.failed_pages ?? task.failed_pages],
+  ] as const;
+}
+
+function taskDetailMetrics(task: CrawlTask) {
+  const evidence = task.evidence || {};
+  return [
+    ["前房源数", evidence.before_listing_count],
+    ["后房源数", evidence.after_listing_count],
+    ["采集房源", evidence.total_found ?? task.total_found],
+    ["新增房源", evidence.inserted_count ?? task.inserted_count],
+    ["价格变化", evidence.updated_count ?? task.updated_count],
+    ["新增快照", evidence.new_snapshot_count ?? task.snapshot_count],
+  ] as const;
+}
+
 export function CrawlTasksPage() {
   const [sources, setSources] = useState<CrawlSource[]>([]);
   const [taskList, setTaskList] = useState<CrawlTaskList | null>(null);
@@ -317,6 +348,13 @@ export function CrawlTasksPage() {
     refresh();
   }, []);
 
+  useEffect(() => {
+    const hasActiveTask = (taskList?.items ?? []).some(item => ["pending", "running", "cancel_requested"].includes(item.status));
+    if (!hasActiveTask) return;
+    const timer = window.setInterval(() => refresh(), 4000);
+    return () => window.clearInterval(timer);
+  }, [taskList]);
+
   const buildRequestBody = (payload: CreatePayload) => {
     const districtList = payload.districts
       .split(/[,，]/)
@@ -330,6 +368,7 @@ export function CrawlTasksPage() {
       max_workers: Number(payload.maxWorkers) || 2,
       mode: payload.mode,
       run_now: payload.runNow,
+      background: payload.runNow,
     };
   };
 
@@ -337,7 +376,7 @@ export function CrawlTasksPage() {
     setCreating(true);
     try {
       await api.createCrawlTask(buildRequestBody(payload));
-      toast.success(payload.runNow ? "任务已创建并执行" : "任务已创建");
+      toast.success(payload.runNow ? "任务已创建，正在后台执行" : "任务已创建");
       setCreateOpen(false);
       refresh();
     } catch (submitError) {
@@ -353,7 +392,7 @@ export function CrawlTasksPage() {
     setSavingEdit(true);
     try {
       await api.updateCrawlTask(editingTask.id, buildRequestBody(payload));
-      toast.success(payload.runNow ? "任务已更新并执行" : "任务已更新");
+      toast.success(payload.runNow ? "任务已更新，正在后台执行" : "任务已更新");
       setEditingTask(null);
       refresh();
     } catch (submitError) {
@@ -367,8 +406,8 @@ export function CrawlTasksPage() {
   const runTask = async (task: CrawlTask) => {
     setRunningTaskId(task.id);
     try {
-      await api.runCrawlTask(task.id);
-      toast.success("任务执行完成");
+      await api.runCrawlTask(task.id, { background: true });
+      toast.success("任务已提交，正在后台执行");
       refresh();
     } catch (runError) {
       const message = runError instanceof Error ? runError.message : "任务执行失败";
@@ -655,12 +694,7 @@ export function CrawlTasksPage() {
                       </span>
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
-                      {[
-                        ["前房源数", task.evidence.before_listing_count],
-                        ["后房源数", task.evidence.after_listing_count],
-                        ["新增快照", task.evidence.new_snapshot_count],
-                        ["失败页", task.evidence.failed_pages],
-                      ].map(([label, value]) => (
+                      {taskSummaryMetrics(task).map(([label, value]) => (
                         <div
                           key={String(label)}
                           className="rounded-lg px-2.5 py-2"
@@ -686,13 +720,8 @@ export function CrawlTasksPage() {
 
       {selectedEvidenceTask?.evidence && (
         <SectionCard title={`任务详情 #${selectedEvidenceTask.id} · ${selectedEvidenceTask.name}`}>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-            {[
-              ["前房源数", selectedEvidenceTask.evidence.before_listing_count],
-              ["后房源数", selectedEvidenceTask.evidence.after_listing_count],
-              ["前快照数", selectedEvidenceTask.evidence.before_snapshot_count],
-              ["后快照数", selectedEvidenceTask.evidence.after_snapshot_count],
-            ].map(([label, value]) => (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+            {taskDetailMetrics(selectedEvidenceTask).map(([label, value]) => (
               <div
                 key={String(label)}
                 className="rounded-lg p-3"

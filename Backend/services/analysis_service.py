@@ -100,21 +100,72 @@ def _analysis_condition():
 
 class AnalysisService:
     @staticmethod
-    def create_job(payload: dict) -> AnalysisJob:
+    def _default_job_name(job_type: str) -> str:
+        labels = {
+            "all": "全量分析",
+            "eda": "EDA 探索",
+            "regression": "挂牌价回归",
+            "tune": "参数搜索",
+            "cluster": "聚类分层",
+            "anomaly": "异常检测",
+        }
+        return labels.get(job_type, "分析任务")
+
+    @staticmethod
+    def _resolve_job_name(job_type: str, raw_name) -> str:
+        text = str(raw_name or "").strip()
+        if not text:
+            return AnalysisService._default_job_name(job_type)
+        return text[:128]
+
+    @staticmethod
+    def _resolve_job_payload(payload: dict) -> tuple[str, int]:
         job_type = str(payload.get("job_type") or "all").strip().lower()
         if job_type not in VALID_JOB_TYPES:
             raise ValueError(f"job_type 仅支持: {', '.join(sorted(VALID_JOB_TYPES))}")
-
         max_samples = min(20_000, max(100, int(payload.get("max_samples") or 5000)))
+        return job_type, max_samples
+
+    @staticmethod
+    def prepare_job(payload: dict) -> tuple[AnalysisJob, int]:
+        job_type, max_samples = AnalysisService._resolve_job_payload(payload)
         now = datetime.utcnow()
-        job = AnalysisJob(job_type=job_type, status="pending", created_at=now, updated_at=now)
+        job = AnalysisJob(
+            name=AnalysisService._resolve_job_name(job_type, payload.get("name")),
+            job_type=job_type,
+            status="pending",
+            created_at=now,
+            updated_at=now,
+        )
         db.session.add(job)
         db.session.commit()
+        return job, max_samples
 
+    @staticmethod
+    def create_job(payload: dict) -> AnalysisJob:
+        job, max_samples = AnalysisService.prepare_job(payload)
+        return AnalysisService.run_job(job.id, max_samples=max_samples)
+
+    @staticmethod
+    def run_job(job_id: int, max_samples: int = 5000) -> AnalysisJob:
+        job = db.session.get(AnalysisJob, job_id)
+        if job is None:
+            raise ValueError("分析任务不存在")
+        if job.status == "running":
+            raise ValueError("分析任务正在运行")
+
+        job_type = job.job_type
         try:
             job.status = "running"
+            job.sample_count = 0
+            job.train_count = 0
+            job.test_count = 0
             job.started_at = datetime.utcnow()
             job.updated_at = job.started_at
+            job.error_message = None
+            ModelResult.query.filter_by(job_id=job.id).delete()
+            db.session.commit()
+
             records = AnalysisService._load_records(max_samples=max_samples)
             job.sample_count = len(records)
             sampling_evidence = AnalysisService._sampling_evidence(records, requested_max_samples=max_samples)
@@ -186,6 +237,42 @@ class AnalysisService:
         return db.session.get(AnalysisJob, job_id)
 
     @staticmethod
+    def rename_job(job_id: int, name: str) -> AnalysisJob:
+        job = db.session.get(AnalysisJob, job_id)
+        if job is None:
+            raise ValueError("分析任务不存在")
+        text = str(name or "").strip()
+        if not text:
+            raise ValueError("任务名称不能为空")
+        job.name = text[:128]
+        job.updated_at = datetime.utcnow()
+        db.session.commit()
+        return job
+
+    @staticmethod
+    def delete_job(job_id: int) -> None:
+        job = db.session.get(AnalysisJob, job_id)
+        if job is None:
+            raise ValueError("分析任务不存在")
+        if job.status == "running":
+            raise ValueError("运行中的分析任务不能删除")
+        db.session.delete(job)
+        db.session.commit()
+
+    @staticmethod
+    def replay_payload(job_id: int) -> dict:
+        job = db.session.get(AnalysisJob, job_id)
+        if job is None:
+            raise ValueError("分析任务不存在")
+        sample_count = int(job.sample_count or 0)
+        max_samples = min(20_000, max(500, sample_count)) if sample_count else 5000
+        return {
+            "name": job.display_name,
+            "job_type": job.job_type,
+            "max_samples": max_samples,
+        }
+
+    @staticmethod
     def latest_success_job() -> AnalysisJob | None:
         return (
             AnalysisJob.query.filter_by(status="success")
@@ -237,6 +324,398 @@ class AnalysisService:
             "results": [item.to_dict() for item in result_items],
             "jobs_by_type": jobs_by_type,
             "note": "按 result_type 读取最近成功结果；用于本地演示时避免最新单项任务覆盖其他分析页签。",
+        }
+
+    @staticmethod
+    def simulate_listing(payload: dict) -> dict:
+        request_item = AnalysisService._normalize_simulation_input(payload)
+        max_samples = min(8_000, max(500, int(payload.get("max_samples") or 5000)))
+        records = AnalysisService._load_records(max_samples=max_samples)
+        training_records, exclusion = AnalysisService._filter_regression_records(records)
+        if len(training_records) < 10:
+            raise ValueError("当前可用于试算的有效样本不足，请先补采或重新训练分析任务。")
+
+        estimate = AnalysisService._estimate_listing(training_records, request_item)
+        cluster_input = {
+            **request_item,
+            "unit_price": estimate["cluster_basis"]["unit_price"],
+            "total_price": estimate["cluster_basis"]["total_price"],
+        }
+        cluster = AnalysisService._assign_cluster(records, cluster_input)
+        district_reference = AnalysisService._district_reference(training_records, request_item["district"])
+        comparables = AnalysisService._similar_samples(
+            training_records,
+            district=request_item["district"],
+            area=request_item["area"],
+            unit_price=estimate["estimated_unit_price"],
+            limit=3,
+        )
+        return {
+            "input": {
+                "district": request_item["district"],
+                "community": request_item["community"],
+                "source": request_item["source"],
+                "area": _round(request_item["area"], 2),
+                "rooms": int(request_item["rooms"]),
+                "halls": int(request_item["halls"]),
+                "layout": request_item["layout"],
+                "floor_level": request_item["floor_level"],
+                "orientation": request_item["orientation"],
+                "decoration": request_item["decoration"],
+                "house_age": _round(request_item["house_age"], 2) if request_item["house_age"] is not None else None,
+            },
+            "regression": estimate,
+            "cluster": cluster,
+            "comparables": comparables,
+            "district_reference": district_reference,
+            "evidence": {
+                "sample_count": len(records),
+                "training_sample_count": len(training_records),
+                "excluded_count": exclusion["excluded_count"],
+                "filters": AnalysisService._default_filters(),
+                "model_note": "输出的是挂牌价/报价辅助估计，用于解释和参考，不代表成交价预测。",
+            },
+        }
+
+    @staticmethod
+    def _normalize_simulation_input(payload: dict) -> dict:
+        district_raw = str(payload.get("district") or "").strip()
+        district = normalize_district_name(district_raw)
+        if not district or district == "待复核":
+            raise ValueError("试算时必须提供有效区县。")
+
+        area = _numeric_or_none(payload.get("area"))
+        if area is None or area < 10 or area > 500:
+            raise ValueError("建筑面积需在 10-500 ㎡之间。")
+
+        rooms = int(_numeric_or_none(payload.get("rooms")) or 0)
+        halls = int(_numeric_or_none(payload.get("halls")) or 0)
+        if rooms < 0 or rooms > 10 or halls < 0 or halls > 10:
+            raise ValueError("室/厅数量超出合理范围。")
+
+        house_age = _numeric_or_none(payload.get("house_age"))
+        build_year = _numeric_or_none(payload.get("build_year"))
+        if house_age is None and build_year is not None:
+            current_year = datetime.utcnow().year
+            if 1950 <= build_year <= current_year:
+                house_age = current_year - build_year
+        if house_age is not None and (house_age < 0 or house_age > 100):
+            raise ValueError("房龄需在 0-100 年之间。")
+
+        floor_level = str(payload.get("floor_level") or "mid").strip().lower()
+        if floor_level not in {"low", "mid", "high", "unknown"}:
+            floor_level = "mid"
+
+        source = str(payload.get("source") or "fang").strip() or "fang"
+        community = str(payload.get("community") or "").strip()[:32] or "待复核"
+        orientation = str(payload.get("orientation") or "南").strip()[:32] or "南"
+        decoration = str(payload.get("decoration") or "简装").strip()[:32] or "简装"
+        layout = str(payload.get("layout") or "").strip()[:32] or (f"{rooms}室{halls}厅" if rooms else "unknown")
+
+        observed_unit_price = _numeric_or_none(payload.get("unit_price"))
+        observed_total_price = _numeric_or_none(payload.get("total_price"))
+        return {
+            "id": 0,
+            "source": source,
+            "title": "用户试算样本",
+            "district": district,
+            "raw_district": district_raw or district,
+            "community": community,
+            "total_price": observed_total_price,
+            "unit_price": observed_unit_price,
+            "area": float(area),
+            "layout": layout,
+            "rooms": float(rooms),
+            "halls": float(halls),
+            "orientation": orientation,
+            "decoration": decoration,
+            "house_age": house_age,
+            "floor_score": _floor_score(floor_level),
+            "floor_level": floor_level,
+            "quality": 100,
+            "updated_at": None,
+        }
+
+    @staticmethod
+    def _estimate_listing(records: list[dict], item: dict) -> dict:
+        encoder = AnalysisService._build_feature_encoder(records)
+        x_train = [AnalysisService._features_for_item(row, encoder) for row in records]
+        y_train = [row["unit_price"] for row in records]
+        algorithm = "Ridge 线性基线"
+        feature_importance = []
+        try:
+            from sklearn.ensemble import RandomForestRegressor
+
+            model = RandomForestRegressor(
+                n_estimators=120,
+                max_depth=16,
+                min_samples_leaf=3,
+                random_state=42,
+                n_jobs=1,
+            )
+            model.fit(x_train, y_train)
+            predicted_unit_price = float(model.predict([AnalysisService._features_for_item(item, encoder)])[0])
+            feature_importance = AnalysisService._sklearn_feature_importance(model, encoder["feature_names"], x_train, y_train)
+            algorithm = "RandomForestRegressor 在线辅助估价"
+        except Exception:
+            ridge = AnalysisService._fit_ridge(records)
+            predicted_unit_price = float(AnalysisService._predict(ridge, [{**item, "unit_price": item.get("unit_price") or 0}])[0]["predicted"])
+            feature_importance = AnalysisService._feature_importance(ridge, records)
+
+        predicted_unit_price = max(1000.0, min(100000.0, predicted_unit_price))
+        predicted_total_price = predicted_unit_price * float(item["area"]) / 10000
+        cluster_basis_unit_price = float(item.get("unit_price") or predicted_unit_price)
+        cluster_basis_total_price = float(item.get("total_price") or (cluster_basis_unit_price * float(item["area"]) / 10000))
+        return {
+            "model_name": algorithm,
+            "estimated_unit_price": _round(predicted_unit_price, 2),
+            "estimated_total_price": _round(predicted_total_price, 2),
+            "price_note": "估计值基于当前有效挂牌样本训练得到，仅作为挂牌价/报价参考。",
+            "top_factors": AnalysisService._estimate_explanations(item, encoder, feature_importance),
+            "feature_importance": feature_importance[:8],
+            "cluster_basis": {
+                "unit_price": cluster_basis_unit_price,
+                "total_price": cluster_basis_total_price,
+                "used_observed_price": item.get("unit_price") is not None or item.get("total_price") is not None,
+            },
+        }
+
+    @staticmethod
+    def _estimate_explanations(item: dict, encoder: dict, feature_importance: list[dict]) -> list[dict]:
+        district_item = encoder["district_target"].get(item["district"], {})
+        community_key = AnalysisService._normalize_category(item.get("community"))
+        community_item = encoder["community_target"].get(community_key, {})
+        layout_bucket = AnalysisService._layout_bucket(item.get("rooms"), item.get("layout"))
+        orientation_bucket = AnalysisService._orientation_bucket(item.get("orientation"))
+        decoration_bucket = AnalysisService._decoration_bucket(item.get("decoration"))
+
+        explanations = []
+        for factor in feature_importance:
+            feature = str(factor.get("feature") or "")
+            importance = _round(factor.get("importance") or 0, 4)
+            note = None
+            if feature == "建筑面积":
+                note = f"输入面积为 {_round(item['area'], 1)} ㎡。"
+            elif feature == "室数":
+                note = f"户型为 {int(item.get('rooms') or 0)} 室。"
+            elif feature == "厅数":
+                note = f"户型为 {int(item.get('halls') or 0)} 厅。"
+            elif feature == "楼层等级数值":
+                note = f"楼层等级输入为 {item.get('floor_level') or 'unknown'}。"
+            elif feature == "房龄（缺失按样本中位数填补）":
+                value = item.get("house_age")
+                note = "当前试算未填写房龄，模型内部会按样本中位数处理。" if value is None else f"当前房龄约 {_round(value, 1)} 年。"
+            elif feature == "区县目标编码":
+                note = (
+                    f"{item['district']} 在训练样本中的挂牌单价基线约为 "
+                    f"{_round(district_item.get('raw_mean') or encoder['global_mean'], 2)} 元/㎡。"
+                )
+            elif feature == "楼盘目标编码":
+                note = (
+                    f"{item.get('community') or '该小区'} 的楼盘基线约为 "
+                    f"{_round(community_item.get('raw_mean') or encoder['global_mean'], 2)} 元/㎡。"
+                )
+            elif feature.startswith("户型=") and feature.endswith(layout_bucket):
+                note = f"当前房源命中户型分组“{layout_bucket}”。"
+            elif feature.startswith("朝向=") and feature.endswith(orientation_bucket):
+                note = f"当前朝向分组为“{orientation_bucket}”。"
+            elif feature.startswith("装修=") and feature.endswith(decoration_bucket):
+                note = f"当前装修分组为“{decoration_bucket}”。"
+            elif feature.startswith("楼层=") and feature.endswith(str(item.get("floor_level") or "unknown")):
+                note = f"当前楼层标签为“{item.get('floor_level') or 'unknown'}”。"
+            elif feature.startswith("来源=") and feature.endswith(str(item.get("source") or "unknown")):
+                note = f"当前试算来源按“{item.get('source') or 'unknown'}”口径处理。"
+
+            if note:
+                explanations.append({"feature": feature, "importance": importance, "note": note})
+            if len(explanations) >= 6:
+                break
+        return explanations
+
+    @staticmethod
+    def _district_reference(records: list[dict], district: str) -> dict:
+        rows = [item for item in records if item["district"] == district]
+        if not rows:
+            rows = records
+        prices = [float(item["unit_price"]) for item in rows]
+        return {
+            "district": district,
+            "listing_count": len(rows),
+            "avg_unit_price": _round(mean(prices), 2) if prices else None,
+            "p25_unit_price": _round(_quantile(prices, 0.25), 2),
+            "median_unit_price": _round(_quantile(prices, 0.5), 2),
+            "p75_unit_price": _round(_quantile(prices, 0.75), 2),
+        }
+
+    @staticmethod
+    def _similar_samples(records: list[dict], district: str, area: float, unit_price: float, limit: int = 3) -> list[dict]:
+        candidates = [item for item in records if item["district"] == district] or records
+        ordered = sorted(
+            candidates,
+            key=lambda item: (
+                abs(float(item["area"]) - float(area)),
+                abs(float(item["unit_price"]) - float(unit_price)),
+                item["id"],
+            ),
+        )
+        result = []
+        for item in ordered[: max(1, limit)]:
+            result.append(
+                {
+                    "id": item["id"],
+                    "title": item["title"],
+                    "district": item["district"],
+                    "area": _round(item["area"], 2),
+                    "unit_price": _round(item["unit_price"], 2),
+                    "total_price": _round(item["total_price"], 2),
+                    "layout": item.get("layout"),
+                }
+            )
+        return result
+
+    @staticmethod
+    def _assign_cluster(records: list[dict], item: dict) -> dict:
+        if len(records) < 4:
+            return {
+                "label": "样本不足",
+                "algorithm": "none",
+                "cluster_count": 0,
+                "note": "当前样本不足，暂不输出稳定的聚类归类结果。",
+            }
+        try:
+            return AnalysisService._sklearn_cluster_assignment(records, item)
+        except Exception:
+            return AnalysisService._deterministic_cluster_assignment(records, item)
+
+    @staticmethod
+    def _sklearn_cluster_assignment(records: list[dict], item: dict) -> dict:
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+        from sklearn.preprocessing import StandardScaler
+
+        house_age_fill = AnalysisService._house_age_fill(records)
+        use_house_age = house_age_fill is not None
+        feature_names = ["挂牌单价", "挂牌总价", "面积"]
+        features = []
+        for row in records:
+            feature_row = [row["unit_price"], row["total_price"], row["area"]]
+            if use_house_age:
+                feature_row.append(AnalysisService._house_age_for_model(row, house_age_fill))
+            features.append(feature_row)
+        input_row = [float(item["unit_price"]), float(item["total_price"]), float(item["area"])]
+        if use_house_age:
+            input_row.append(AnalysisService._house_age_for_model(item, house_age_fill))
+            feature_names.append("房龄（缺失按样本中位数填补）")
+
+        scaler = StandardScaler()
+        scaled = scaler.fit_transform(features)
+        input_scaled = scaler.transform([input_row])[0]
+        max_k = min(4, len(records) - 1)
+        candidates = []
+        for k in range(2, max_k + 1):
+            model = KMeans(n_clusters=k, n_init=10, random_state=42)
+            labels = model.fit_predict(scaled)
+            score = silhouette_score(scaled, labels) if len(set(labels)) > 1 else -1
+            candidates.append((score, k, labels, model))
+        score, k, labels, model = max(candidates, key=lambda value: value[0])
+        grouped: dict[int, list[dict]] = defaultdict(list)
+        for row, cluster_id in zip(records, labels):
+            grouped[int(cluster_id)].append(row)
+        ordered_clusters = sorted(grouped.keys(), key=lambda cid: mean(row["unit_price"] for row in grouped[cid]))
+        label_map = {cluster_id: CLUSTER_LABELS[min(index, len(CLUSTER_LABELS) - 1)] for index, cluster_id in enumerate(ordered_clusters)}
+        assigned_cluster = int(model.predict([input_scaled])[0])
+        raw_center = scaler.inverse_transform([model.cluster_centers_[assigned_cluster]])[0]
+        profile_rows = grouped[assigned_cluster]
+        profile = {
+            "cluster": assigned_cluster,
+            "label": label_map[assigned_cluster],
+            "count": len(profile_rows),
+            "avg_unit_price": _round(mean(row["unit_price"] for row in profile_rows), 2),
+            "avg_total_price": _round(mean(row["total_price"] for row in profile_rows), 2),
+            "avg_area": _round(mean(row["area"] for row in profile_rows), 2),
+            "avg_house_age": AnalysisService._optional_mean(row.get("house_age") for row in profile_rows),
+            "top_districts": Counter(row["district"] for row in profile_rows).most_common(3),
+        }
+        return {
+            "label": label_map[assigned_cluster],
+            "cluster": assigned_cluster,
+            "cluster_count": k,
+            "algorithm": "sklearn.cluster.KMeans",
+            "silhouette_score": _round(score, 4),
+            "assigned_center": {
+                "unit_price": _round(raw_center[0], 2),
+                "total_price": _round(raw_center[1], 2),
+                "area": _round(raw_center[2], 2),
+                "house_age": _round(raw_center[3], 2) if use_house_age else None,
+            },
+            "profile": profile,
+            "note": f"按{'、'.join(feature_names[:3])}等特征自动归入“{label_map[assigned_cluster]}”分层。",
+        }
+
+    @staticmethod
+    def _deterministic_cluster_assignment(records: list[dict], item: dict) -> dict:
+        k = 4 if len(records) >= 8 else max(2, min(3, len(records)))
+        house_age_fill = AnalysisService._house_age_fill(records)
+        use_house_age = house_age_fill is not None
+        points = []
+        for row in records:
+            feature_row = [row["unit_price"], row["area"]]
+            if use_house_age:
+                feature_row.append(AnalysisService._house_age_for_model(row, house_age_fill))
+            points.append(feature_row)
+        input_point = [float(item["unit_price"]), float(item["area"])]
+        if use_house_age:
+            input_point.append(AnalysisService._house_age_for_model(item, house_age_fill))
+        columns = list(zip(*points))
+        means = [mean(column) for column in columns]
+        stds = [math.sqrt(mean((value - means[index]) ** 2 for value in column)) or 1.0 for index, column in enumerate(columns)]
+        scaled = [[(value - means[index]) / stds[index] for index, value in enumerate(point)] for point in points]
+        input_scaled = [(value - means[index]) / stds[index] for index, value in enumerate(input_point)]
+        ordered_indexes = sorted(range(len(records)), key=lambda index: records[index]["unit_price"])
+        centers = [scaled[ordered_indexes[min(len(ordered_indexes) - 1, round(i * (len(ordered_indexes) - 1) / max(1, k - 1)))]] for i in range(k)]
+        assignments = [0 for _ in records]
+        for _ in range(15):
+            for index, point in enumerate(scaled):
+                assignments[index] = min(range(k), key=lambda cid: AnalysisService._distance(point, centers[cid]))
+            for cid in range(k):
+                members = [point for index, point in enumerate(scaled) if assignments[index] == cid]
+                if members:
+                    centers[cid] = [mean(column) for column in zip(*members)]
+        assigned_cluster = min(range(k), key=lambda cid: AnalysisService._distance(input_scaled, centers[cid]))
+        grouped: dict[int, list[dict]] = defaultdict(list)
+        for row, cluster_id in zip(records, assignments):
+            grouped[int(cluster_id)].append(row)
+        ordered_clusters = sorted(grouped.keys(), key=lambda cid: mean(row["unit_price"] for row in grouped[cid]))
+        label_map = {cluster_id: CLUSTER_LABELS[min(index, len(CLUSTER_LABELS) - 1)] for index, cluster_id in enumerate(ordered_clusters)}
+        if assigned_cluster not in grouped or not grouped[assigned_cluster]:
+            assigned_cluster = min(
+                grouped.keys(),
+                key=lambda cid: AnalysisService._distance(input_scaled, centers[cid]),
+            )
+        profile_rows = grouped[assigned_cluster]
+        raw_center = [centers[assigned_cluster][index] * stds[index] + means[index] for index in range(len(means))]
+        profile = {
+            "cluster": assigned_cluster,
+            "label": label_map[assigned_cluster],
+            "count": len(profile_rows),
+            "avg_unit_price": _round(mean(row["unit_price"] for row in profile_rows), 2),
+            "avg_total_price": _round(mean(row["total_price"] for row in profile_rows), 2),
+            "avg_area": _round(mean(row["area"] for row in profile_rows), 2),
+            "avg_house_age": AnalysisService._optional_mean(row.get("house_age") for row in profile_rows),
+            "top_districts": Counter(row["district"] for row in profile_rows).most_common(3),
+        }
+        return {
+            "label": label_map[assigned_cluster],
+            "cluster": assigned_cluster,
+            "cluster_count": k,
+            "algorithm": "deterministic_kmeans",
+            "assigned_center": {
+                "unit_price": _round(raw_center[0], 2),
+                "area": _round(raw_center[1], 2),
+                "house_age": _round(raw_center[2], 2) if use_house_age else None,
+            },
+            "profile": profile,
+            "note": f"按挂牌单价、面积等特征自动归入“{label_map[assigned_cluster]}”分层。",
         }
 
     @staticmethod

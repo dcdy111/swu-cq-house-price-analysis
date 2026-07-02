@@ -26,6 +26,7 @@ class AnalysisJob(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(128))
     job_type = db.Column(db.String(32), nullable=False, default="all")
     status = db.Column(db.String(32), nullable=False, default="pending")
     sample_count = db.Column(db.Integer, nullable=False, default=0)
@@ -47,6 +48,7 @@ class AnalysisJob(db.Model):
     def to_dict(self, include_results: bool = True) -> dict:
         data = {
             "id": self.id,
+            "name": self.display_name,
             "job_type": self.job_type,
             "status": self.status,
             "sample_count": self.sample_count,
@@ -61,6 +63,20 @@ class AnalysisJob(db.Model):
         if include_results:
             data["results"] = [result.to_dict() for result in self.results]
         return data
+
+    @property
+    def display_name(self) -> str:
+        if self.name:
+            return self.name
+        labels = {
+            "all": "全量分析",
+            "eda": "EDA 探索",
+            "regression": "挂牌价回归",
+            "tune": "参数搜索",
+            "cluster": "聚类分层",
+            "anomaly": "异常检测",
+        }
+        return labels.get(self.job_type, self.job_type or "分析任务")
 
 
 class ModelResult(db.Model):

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -9,7 +9,7 @@ import { SectionCard } from "../common/SectionCard";
 import { StatusTag } from "../common/StatusTag";
 import { toast } from "sonner";
 import { Eye, EyeOff, RefreshCw, Save, Server, Database, Cpu, Globe } from "lucide-react";
-import { api, type SystemSettings } from "../../services/api";
+import { api, type CrawlTask, type DashboardOverview, type SchedulerStatusData, type SystemSettings } from "../../services/api";
 
 const SOURCE_LABELS: Record<string, string> = {
   fang: "房天下",
@@ -38,8 +38,16 @@ function maskStatus(settings: SystemSettings | null) {
   return settings.deepseek.api_key_masked || "已配置";
 }
 
+function formatDateTime(value?: string | null) {
+  if (!value) return "--";
+  return value.length > 19 ? value.slice(0, 19) : value;
+}
+
 export function SettingsPage() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatusData | null>(null);
+  const [runtimeOverview, setRuntimeOverview] = useState<DashboardOverview | null>(null);
+  const [runtimeTasks, setRuntimeTasks] = useState<CrawlTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -49,9 +57,17 @@ export function SettingsPage() {
 
   const loadSettings = () => {
     setLoading(true);
-    api.getSettings()
-      .then(data => {
+    Promise.all([
+      api.getSettings(),
+      api.getSchedulerStatus().catch(() => null),
+      api.getOverview().catch(() => null),
+      api.getCrawlTasks(1, 100).catch(() => null),
+    ])
+      .then(([data, scheduler, overview, crawlTasks]) => {
         setSettings(data);
+        setSchedulerStatus(scheduler);
+        setRuntimeOverview(overview);
+        setRuntimeTasks(crawlTasks?.items ?? []);
         setApiKey("");
         setError(null);
       })
@@ -159,6 +175,13 @@ export function SettingsPage() {
   };
 
   const sourceEntries = Object.entries(settings?.crawler.sources ?? {});
+  const schedulerJobs = schedulerStatus?.jobs ?? [];
+  const incrementalJob = schedulerJobs.find(item => item.id === "incremental_crawl") ?? null;
+  const qualityJob = schedulerJobs.find(item => item.id === "quality_report_snapshot") ?? null;
+  const recentAutoTasks = useMemo(
+    () => runtimeTasks.filter(item => item.mode === "scheduled_incremental" || item.mode === "manual_incremental").slice(0, 5),
+    [runtimeTasks],
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -385,10 +408,42 @@ export function SettingsPage() {
             <SectionCard title="运行信息">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { icon: <Server size={20} style={{ color: "#163A70" }} />, title: "后端", items: ["Flask + Blueprint", "本地鉴权", "system_settings"] },
-                  { icon: <Database size={20} style={{ color: "#163A70" }} />, title: "数据库", items: ["MySQL 8.x", "listings / snapshots", "任务日志"] },
-                  { icon: <Cpu size={20} style={{ color: "#163A70" }} />, title: "任务", items: ["ThreadPoolExecutor", "APScheduler"] },
-                  { icon: <Globe size={20} style={{ color: "#163A70" }} />, title: "前端", items: ["Vite", "ECharts", "React"] },
+                  {
+                    icon: <Server size={20} style={{ color: "#163A70" }} />,
+                    title: "后端服务",
+                    items: [
+                      "Flask + Gunicorn",
+                      schedulerStatus?.running ? "APScheduler 运行中" : "APScheduler 未运行",
+                      schedulerStatus?.lock_owner_pid ? `调度锁 PID ${schedulerStatus.lock_owner_pid}` : "无调度锁信息",
+                    ],
+                  },
+                  {
+                    icon: <Database size={20} style={{ color: "#163A70" }} />,
+                    title: "MySQL 实时数据",
+                    items: [
+                      `当前房源 ${runtimeOverview?.kpis?.total_count?.toLocaleString?.() ?? "--"} 条`,
+                      `分析就绪 ${runtimeOverview?.kpis?.analysis_ready_count?.toLocaleString?.() ?? "--"} 条`,
+                      `最近更新 ${formatDateTime(runtimeOverview?.kpis?.latest_updated_at)}`,
+                    ],
+                  },
+                  {
+                    icon: <Cpu size={20} style={{ color: "#163A70" }} />,
+                    title: "定时调度",
+                    items: [
+                      `增量采集 ${incrementalJob ? "已注册" : "未注册"}`,
+                      `下次采集 ${formatDateTime(incrementalJob?.next_run_time)}`,
+                      `下次质检 ${formatDateTime(qualityJob?.next_run_time)}`,
+                    ],
+                  },
+                  {
+                    icon: <Globe size={20} style={{ color: "#163A70" }} />,
+                    title: "任务执行",
+                    items: [
+                      `历史任务 ${runtimeTasks.length || 0} 条`,
+                      `最近自动任务 ${recentAutoTasks.length || 0} 条`,
+                      settings?.scheduler.incremental_crawl_job_enabled ? "自动增量已启用" : "自动增量未启用",
+                    ],
+                  },
                 ].map(({ icon, title, items }) => (
                   <div key={title} className="p-4 rounded-xl flex flex-col gap-3" style={{ background: "#F7F9FC", border: "1px solid #E5EAF2" }}>
                     <div className="flex items-center gap-2">
@@ -402,6 +457,51 @@ export function SettingsPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+              <div
+                className="mt-4 rounded-lg px-4 py-3"
+                style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#1E3A8A", fontSize: 12, lineHeight: 1.8 }}
+              >
+                {schedulerStatus?.note || "当前页面展示的是服务器实时运行信息，可作为答辩时的调度与更新证据。"}
+              </div>
+              <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="rounded-xl p-4" style={{ background: "#fff", border: "1px solid #E5EAF2" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#163A70" }}>调度任务</div>
+                  <div className="mt-3 flex flex-col gap-3">
+                    {[incrementalJob, qualityJob].filter(Boolean).map(job => (
+                      <div key={job?.id} className="rounded-lg px-3 py-2.5" style={{ background: "#F8FAFC" }}>
+                        <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>{job?.name}</div>
+                        <div style={{ fontSize: 11, color: "#6B7280", marginTop: 4 }}>
+                          {job?.id} · 下次运行 {formatDateTime(job?.next_run_time)}
+                        </div>
+                      </div>
+                    ))}
+                    {schedulerJobs.length === 0 && (
+                      <div style={{ fontSize: 12, color: "#9CA3AF" }}>当前 worker 未持有调度器实例，但系统已通过调度锁机制保证只有一个 worker 真正执行定时任务。</div>
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-xl p-4" style={{ background: "#fff", border: "1px solid #E5EAF2" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#163A70" }}>最近自动/增量任务</div>
+                  <div className="mt-3 flex flex-col gap-3">
+                    {recentAutoTasks.map(task => (
+                      <div key={task.id} className="rounded-lg px-3 py-2.5" style={{ background: "#F8FAFC" }}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div style={{ fontSize: 12, color: "#1F2937", fontWeight: 600 }}>
+                            #{task.id} · {task.name}
+                          </div>
+                          <StatusTag status={task.status} label={task.status} />
+                        </div>
+                        <div style={{ fontSize: 11, color: "#6B7280", marginTop: 4 }}>
+                          {task.mode} · 新增 {task.inserted_count} · 价格变化 {task.updated_count} · 结束 {formatDateTime(task.finished_at)}
+                        </div>
+                      </div>
+                    ))}
+                    {recentAutoTasks.length === 0 && (
+                      <div style={{ fontSize: 12, color: "#9CA3AF" }}>当前还没有近期自动增量任务记录。</div>
+                    )}
+                  </div>
+                </div>
               </div>
             </SectionCard>
           </div>

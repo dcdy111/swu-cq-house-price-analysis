@@ -58,8 +58,15 @@ RETRY_PROMPT = """上一版回答未通过数值校验，请严格重写。
 5. 所有价格口径都写成挂牌价/报价，不得写成交价。
 """
 
-NUMBER_PATTERN = re.compile(r"(?<![\w])[-+]?\d[\d,]*(?:\.\d+)?%?")
-ALLOWED_TRANSACTION_PHRASES = ("不代表成交价", "并非成交价")
+NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?\d[\d,]*(?:\.\d+)?%?")
+ALLOWED_TRANSACTION_PATTERNS = (
+    re.compile(r"不代表\s*成交价"),
+    re.compile(r"并非\s*成交价"),
+    re.compile(r"不是\s*成交价"),
+    re.compile(r"并不是\s*成交价"),
+    re.compile(r"非(?:实际)?\s*成交价"),
+    re.compile(r"不等同于\s*成交价"),
+)
 
 
 class DeepSeekInvocationError(RuntimeError):
@@ -86,20 +93,13 @@ class DeepSeekClient:
                 model=model,
                 messages=messages,
             )
-            if not DeepSeekClient._is_grounded_answer(content, evidence):
-                content = DeepSeekClient._request_completion(
-                    settings=settings,
-                    model=model,
-                    messages=[
-                        *messages,
-                        {"role": "assistant", "content": content},
-                        {"role": "user", "content": RETRY_PROMPT},
-                    ],
-                )
-            if not DeepSeekClient._is_grounded_answer(content, evidence):
-                content = DeepSeekClient._qualitative_grounding_fallback(content, evidence)
-            if not DeepSeekClient._is_grounded_answer(content, evidence):
-                raise DeepSeekInvocationError("DeepSeek 返回内容未通过证据校验")
+            content = DeepSeekClient._repair_grounding(
+                content=content,
+                evidence=evidence,
+                settings=settings,
+                model=model,
+                messages=messages,
+            )
             return content, model
         except Exception as exc:
             if isinstance(exc, DeepSeekInvocationError):
@@ -242,18 +242,21 @@ class DeepSeekClient:
         final = "".join(pieces).strip()
         if not final:
             raise DeepSeekInvocationError("DeepSeek 返回空内容")
-        if not DeepSeekClient._is_grounded_answer(final, evidence):
-            final = DeepSeekClient._qualitative_grounding_fallback(final, evidence)
+        repaired = DeepSeekClient._repair_grounding(
+            content=final,
+            evidence=evidence,
+            settings=settings,
+            model=model,
+            messages=messages,
+        )
+        if repaired != final:
+            final = repaired
             yield {"type": "replace", "content": final, "model": model}
-        if not DeepSeekClient._is_grounded_answer(final, evidence):
-            raise DeepSeekInvocationError("DeepSeek 返回内容未通过证据校验")
         yield {"type": "final", "content": final, "model": model}
 
     @staticmethod
     def _is_grounded_answer(answer: str, evidence: dict[str, Any]) -> bool:
-        transaction_text = str(answer or "")
-        for phrase in ALLOWED_TRANSACTION_PHRASES:
-            transaction_text = transaction_text.replace(phrase, "")
+        transaction_text = DeepSeekClient._strip_allowed_transaction_phrases(answer)
         if "成交价" in transaction_text or "精准预测" in transaction_text:
             return False
 
@@ -279,6 +282,47 @@ class DeepSeekClient:
                 continue
             return False
         return True
+
+    @staticmethod
+    def _strip_allowed_transaction_phrases(answer: str) -> str:
+        cleaned = str(answer or "")
+        for pattern in ALLOWED_TRANSACTION_PATTERNS:
+            cleaned = pattern.sub("", cleaned)
+        return cleaned
+
+    @staticmethod
+    def _repair_grounding(
+        content: str,
+        evidence: dict[str, Any],
+        settings: dict[str, Any],
+        model: str,
+        messages: list[dict[str, str]],
+    ) -> str:
+        repaired = str(content or "").strip()
+        if not repaired:
+            raise DeepSeekInvocationError("DeepSeek 返回空内容")
+        if DeepSeekClient._is_grounded_answer(repaired, evidence):
+            return repaired
+
+        retry_content = DeepSeekClient._request_completion(
+            settings=settings,
+            model=model,
+            messages=[
+                *messages,
+                {"role": "assistant", "content": repaired},
+                {"role": "user", "content": RETRY_PROMPT},
+            ],
+        )
+        retry_content = str(retry_content or "").strip()
+        if DeepSeekClient._is_grounded_answer(retry_content, evidence):
+            return retry_content
+
+        fallback_source = retry_content or repaired
+        fallback_content = DeepSeekClient._qualitative_grounding_fallback(fallback_source, evidence)
+        if DeepSeekClient._is_grounded_answer(fallback_content, evidence):
+            return fallback_content
+
+        raise DeepSeekInvocationError("DeepSeek 返回内容未通过证据校验")
 
     @staticmethod
     def _qualitative_grounding_fallback(answer: str, evidence: dict[str, Any]) -> str:

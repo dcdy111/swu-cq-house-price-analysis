@@ -90,6 +90,44 @@ class CrawlTask(db.Model):
     def set_evidence(self, evidence: dict | None) -> None:
         self.evidence_json = json.dumps(evidence or {}, ensure_ascii=False)
 
+    def _fallback_recent_logs(self, limit: int = 8) -> list[dict]:
+        rows = (
+            CrawlLog.query.filter_by(task_id=self.id)
+            .order_by(CrawlLog.created_at.desc(), CrawlLog.id.desc())
+            .limit(limit)
+            .all()
+        )
+        return [item.to_dict() for item in reversed(rows)]
+
+    def _fallback_log_summary(self) -> str:
+        return (
+            f"任务状态 {self.status}；采集房源 {int(self.total_found or 0)}，"
+            f"新增 {int(self.inserted_count or 0)}，价格变化 {int(self.updated_count or 0)}，"
+            f"未变 {int(self.unchanged_count or 0)}，新增快照 {int(self.snapshot_count or 0)}，"
+            f"失败页 {int(self.failed_pages or 0)}。"
+        )
+
+    def evidence_with_fallback(self) -> dict:
+        data = dict(self.evidence)
+        computed_snapshot_count = max(int(self.snapshot_count or 0), int(data.get("new_snapshot_count") or 0))
+        if self.run_id and not data.get("run_id"):
+            data["run_id"] = self.run_id
+        if self.started_at and not data.get("started_at"):
+            data["started_at"] = self.started_at.isoformat(sep=" ")
+        if self.finished_at and not data.get("finished_at"):
+            data["finished_at"] = self.finished_at.isoformat(sep=" ")
+        data.setdefault("inserted_count", int(self.inserted_count or 0))
+        data.setdefault("updated_count", int(self.updated_count or 0))
+        data.setdefault("unchanged_count", int(self.unchanged_count or 0))
+        data["new_snapshot_count"] = computed_snapshot_count
+        data.setdefault("failed_pages", int(self.failed_pages or 0))
+        data.setdefault("total_found", int(self.total_found or 0))
+        if not data.get("log_summary"):
+            data["log_summary"] = self._fallback_log_summary()
+        if not data.get("recent_logs"):
+            data["recent_logs"] = self._fallback_recent_logs()
+        return data
+
     @property
     def failure_rate(self) -> float:
         if self.total_pages <= 0:
@@ -97,6 +135,8 @@ class CrawlTask(db.Model):
         return round(self.failed_pages / self.total_pages, 4)
 
     def to_dict(self, include_logs: bool = False) -> dict:
+        evidence = self.evidence_with_fallback()
+        snapshot_count = max(int(self.snapshot_count or 0), int(evidence.get("new_snapshot_count") or 0))
         data = {
             "id": self.id,
             "name": self.name,
@@ -113,9 +153,9 @@ class CrawlTask(db.Model):
             "inserted_count": self.inserted_count,
             "updated_count": self.updated_count,
             "unchanged_count": self.unchanged_count,
-            "snapshot_count": self.snapshot_count,
+            "snapshot_count": snapshot_count,
             "run_id": self.run_id,
-            "evidence": self.evidence,
+            "evidence": evidence,
             "progress": self.progress,
             "duration_seconds": self.duration_seconds,
             "listings_per_minute": self.listings_per_minute,

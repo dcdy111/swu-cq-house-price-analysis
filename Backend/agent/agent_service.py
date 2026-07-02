@@ -6,6 +6,8 @@ from datetime import datetime
 from uuid import uuid4
 from typing import Generator
 
+from sqlalchemy.exc import IntegrityError
+
 from Backend.agent.deepseek_client import DeepSeekClient, DeepSeekInvocationError
 from Backend.agent.tool_registry import ToolRegistry
 from Backend.extensions import db
@@ -267,7 +269,14 @@ class AgentService:
                 updated_at=datetime.utcnow(),
             )
             db.session.add(session)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                # 同一个 session_id 并发首问时，其他请求可能已经先创建成功。
+                db.session.rollback()
+                session = db.session.get(AgentSession, session_id)
+                if session is None:
+                    raise
         return session
 
     @staticmethod

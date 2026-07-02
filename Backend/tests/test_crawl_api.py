@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from Backend.extensions import db
+from Backend.models.crawl import CrawlTask
+
 
 def test_sources_endpoint(client):
     response = client.get("/api/crawl/sources")
@@ -27,6 +30,36 @@ def test_create_task(client):
     list_response = client.get("/api/crawl/tasks")
     list_payload = list_response.get_json()
     assert list_payload["data"]["pagination"]["total"] == 1
+
+
+def test_create_task_can_dispatch_in_background(client, monkeypatch):
+    captured = {}
+
+    def fake_submit(job_key, func, *args, **kwargs):
+        captured["job_key"] = job_key
+        captured["args"] = args
+        return True
+
+    monkeypatch.setattr("Backend.api.crawl.TaskRunner.submit", fake_submit)
+
+    response = client.post(
+        "/api/crawl/tasks",
+        json={
+            "source": "fang",
+            "districts": ["渝中"],
+            "max_pages": 1,
+            "max_workers": 1,
+            "run_now": True,
+            "background": True,
+        },
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 202
+    assert payload["code"] == 0
+    assert payload["data"]["status"] == "pending"
+    assert captured["job_key"].startswith("crawl:")
+    assert "后台执行队列" in payload["data"]["logs"][0]["message"]
 
 
 def test_cancel_pending_task(client):
@@ -100,3 +133,25 @@ def test_runtime_headers_and_cookie_are_loaded_from_env(monkeypatch):
     assert headers["User-Agent"] == "UA-From-Browser"
     assert headers["Referer"] == "https://cq.esf.fang.com/"
     assert headers["Cookie"] == "sessionid=abc"
+
+
+def test_task_to_dict_uses_consistent_snapshot_count(app):
+    with app.app_context():
+        task = CrawlTask(
+            name="快照口径验收",
+            source="fang",
+            mode="manual_incremental",
+            status="success",
+            total_pages=1,
+            success_pages=1,
+            snapshot_count=0,
+        )
+        task.set_districts(["渝中"])
+        task.set_evidence({"new_snapshot_count": 3, "log_summary": "任务状态 success；新增快照 3。"})
+        db.session.add(task)
+        db.session.commit()
+
+        payload = task.to_dict()
+
+        assert payload["snapshot_count"] == 3
+        assert payload["evidence"]["new_snapshot_count"] == 3

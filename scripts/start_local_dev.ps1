@@ -4,12 +4,40 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $FrontendDir = Join-Path $Root "Frontend"
 $RunDir = Join-Path $Root ".codex-run"
+$VenvPython = Join-Path $Root ".venv\\Scripts\\python.exe"
 $BackendPort = 5000
 $FrontendPort = 5173
 $BackendUrl = "http://127.0.0.1:$BackendPort"
 $FrontendUrl = "http://127.0.0.1:$FrontendPort"
 
 New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
+
+function Resolve-PythonCommand {
+  if (Test-Path -LiteralPath $VenvPython) {
+    return $VenvPython
+  }
+  if ($env:PYTHON_EXE) {
+    return $env:PYTHON_EXE
+  }
+  $python = Get-Command python -ErrorAction SilentlyContinue
+  if ($python) {
+    return $python.Source
+  }
+  throw "Python was not found in PATH. Install Python 3.10+ first, or set `$env:PYTHON_EXE."
+}
+
+function Assert-PythonVersion([string]$PythonCmd) {
+  $versionText = & $PythonCmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to detect Python version from $PythonCmd."
+  }
+  if ([version]$versionText -lt [version]"3.10") {
+    throw "Python 3.10+ is required. Current version: $versionText. If you already installed another interpreter, set `$env:PYTHON_EXE='C:\\Path\\python.exe' and rerun."
+  }
+}
+
+$PythonCmd = Resolve-PythonCommand
+Assert-PythonVersion $PythonCmd
 
 function Test-PortInUse([int]$Port) {
   return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
@@ -29,6 +57,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $FrontendDir "node_modules"))) {
   throw "Frontend dependencies are missing. Run scripts/setup_local.ps1 first."
 }
 
+if (-not (Test-Path -LiteralPath $VenvPython)) {
+  throw "Project virtual environment .venv is missing. Run scripts/setup_local.ps1 first."
+}
+
 if (Test-PortInUse $BackendPort) {
   if (-not (Test-BackendCompatibility)) {
     throw "Port 5000 is occupied by an incompatible service. Stop it and retry."
@@ -46,7 +78,7 @@ $frontendErr = Join-Path $RunDir "local-frontend-5173.err.log"
 
 if (-not (Test-PortInUse $BackendPort)) {
   $backend = Start-Process `
-    -FilePath "python" `
+    -FilePath $PythonCmd `
     -ArgumentList "-m","flask","--app","Backend.app","run","--host","127.0.0.1","--port","5000" `
     -WorkingDirectory $Root `
     -RedirectStandardOutput $backendLog `

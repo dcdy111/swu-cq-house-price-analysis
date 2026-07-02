@@ -34,6 +34,7 @@ class BaseConfig:
     CRAWL_RETRY_TIMES = int(os.getenv("CRAWL_RETRY_TIMES", "2"))
     CRAWL_INTERVAL_MIN = float(os.getenv("CRAWL_INTERVAL_MIN", "1.0"))
     CRAWL_INTERVAL_MAX = float(os.getenv("CRAWL_INTERVAL_MAX", "3.0"))
+    TASK_RUNNER_MAX_WORKERS = int(os.getenv("TASK_RUNNER_MAX_WORKERS", "2"))
     CRAWL_USER_AGENT = os.getenv(
         "CRAWL_USER_AGENT",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

@@ -347,6 +347,7 @@ class CrawlService:
                             action = ListingService.upsert_listing(raw, task_id=task.id)
                             if action == "inserted":
                                 task.inserted_count += 1
+                                task.snapshot_count += 1
                             elif action == "snapshot":
                                 task.updated_count += 1
                                 task.snapshot_count += 1
@@ -434,6 +435,8 @@ class CrawlService:
         evidence = dict(task.evidence)
         before_listing_count = int(evidence.get("before_listing_count") or 0)
         before_snapshot_count = int(evidence.get("before_snapshot_count") or 0)
+        computed_snapshot_count = max(int(task.snapshot_count or 0), int(after_snapshot_count) - before_snapshot_count)
+        task.snapshot_count = computed_snapshot_count
         status_history = list(evidence.get("status_history") or [])
         if task.finished_at:
             status_history.append({"status": task.status, "at": task.finished_at.isoformat(sep=" ")})
@@ -445,7 +448,7 @@ class CrawlService:
         )
         summary = summary_override or (
             f"任务状态 {task.status}；新增 {task.inserted_count}，价格变化 {task.updated_count}，"
-            f"未变 {task.unchanged_count}，新增快照 {task.snapshot_count}，失败页 {task.failed_pages}。"
+            f"未变 {task.unchanged_count}，新增快照 {computed_snapshot_count}，失败页 {task.failed_pages}。"
         )
         evidence.update(
             {
@@ -453,7 +456,7 @@ class CrawlService:
                 "after_listing_count": int(after_listing_count),
                 "after_snapshot_count": int(after_snapshot_count),
                 "listing_delta": int(after_listing_count) - before_listing_count,
-                "new_snapshot_count": int(after_snapshot_count) - before_snapshot_count,
+                "new_snapshot_count": computed_snapshot_count,
                 "inserted_count": int(task.inserted_count or 0),
                 "updated_count": int(task.updated_count or 0),
                 "unchanged_count": int(task.unchanged_count or 0),

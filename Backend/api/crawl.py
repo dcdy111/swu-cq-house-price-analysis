@@ -3,9 +3,21 @@ from __future__ import annotations
 from flask import Blueprint, request
 
 from Backend.services.crawl_service import CrawlService
+from Backend.services.task_runner import TaskRunner
 from Backend.utils.response import api_error, api_success
 
 bp = Blueprint("crawl", __name__, url_prefix="/api/crawl")
+
+
+def _dispatch_task(task_id: int):
+    task = CrawlService.get_task(task_id, include_logs=True)
+    if task is None:
+        raise ValueError("任务不存在")
+    submitted = TaskRunner.submit(f"crawl:{task_id}", CrawlService.run_task, task_id)
+    if not submitted:
+        raise ValueError("任务已在后台执行，请稍后刷新状态")
+    CrawlService.add_log(task_id, "INFO", "任务已提交到后台执行队列")
+    return CrawlService.get_task(task_id, include_logs=True)
 
 
 @bp.get("/sources")
@@ -26,6 +38,9 @@ def create_task():
     try:
         task = CrawlService.create_task(payload)
         if payload.get("run_now"):
+            if payload.get("background"):
+                task = _dispatch_task(task.id)
+                return api_success(task.to_dict(include_logs=True), status_code=202)
             task = CrawlService.run_task(task.id)
         return api_success(task.to_dict(include_logs=True), status_code=201)
     except ValueError as exc:
@@ -46,6 +61,9 @@ def update_task(task_id: int):
     try:
         task = CrawlService.update_task(task_id, payload)
         if payload.get("run_now"):
+            if payload.get("background"):
+                task = _dispatch_task(task.id)
+                return api_success(task.to_dict(include_logs=True), status_code=202)
             task = CrawlService.run_task(task.id)
         return api_success(task.to_dict(include_logs=True))
     except ValueError as exc:
@@ -64,6 +82,9 @@ def delete_task(task_id: int):
 @bp.post("/tasks/<int:task_id>/run")
 def run_task(task_id: int):
     try:
+        if (request.get_json(silent=True) or {}).get("background"):
+            task = _dispatch_task(task_id)
+            return api_success(task.to_dict(include_logs=True), status_code=202)
         task = CrawlService.run_task(task_id)
         return api_success(task.to_dict(include_logs=True))
     except ValueError as exc:

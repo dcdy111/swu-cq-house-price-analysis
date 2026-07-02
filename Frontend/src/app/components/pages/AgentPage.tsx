@@ -33,6 +33,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
+  pending?: boolean;
   turnId?: string;
   toolTraces?: ToolTrace[];
   report?: GeneratedReport | null;
@@ -104,11 +105,25 @@ function useTimer(running: boolean) {
   return elapsed;
 }
 
+function parseBackendDate(value?: string | null) {
+  if (!value) return null;
+  const text = value.trim();
+  if (!text) return null;
+  const hasExplicitTimezone = /(?:[zZ]|[+-]\d{2}:\d{2})$/.test(text);
+  const normalized = hasExplicitTimezone
+    ? text
+    : /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)
+      ? `${text.replace(" ", "T")}Z`
+      : text;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function formatRelativeTime(value?: string | null) {
   if (!value) return "刚刚";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  const diff = Date.now() - parsed.getTime();
+  const parsed = parseBackendDate(value);
+  if (!parsed) return value;
+  const diff = Math.max(0, Date.now() - parsed.getTime());
   if (diff < 60_000) return "刚刚";
   if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60_000))}分钟前`;
   if (diff < 86_400_000) return `${Math.max(1, Math.floor(diff / 3_600_000))}小时前`;
@@ -122,8 +137,8 @@ function formatDuration(seconds: number) {
 
 function durationSeconds(start?: string | null, end?: string | null) {
   if (!start || !end) return 0;
-  const startedAt = new Date(start).getTime();
-  const finishedAt = new Date(end).getTime();
+  const startedAt = parseBackendDate(start)?.getTime();
+  const finishedAt = parseBackendDate(end)?.getTime();
   if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) return 0;
   return Math.max(1, Math.round((finishedAt - startedAt) / 1000));
 }
@@ -192,7 +207,15 @@ function extractRecommendationCards(traces: ToolTrace[]): RecommendationCard[] {
   return Array.isArray(items) ? items : [];
 }
 
-function ThinkingBubble({ elapsed }: { elapsed: number }) {
+function ThinkingBubble({
+  elapsed,
+  toolCount,
+  onOpenActivity,
+}: {
+  elapsed: number;
+  toolCount: number;
+  onOpenActivity?: () => void;
+}) {
   return (
     <div className="flex items-start gap-3">
       <div
@@ -201,12 +224,38 @@ function ThinkingBubble({ elapsed }: { elapsed: number }) {
       >
         助
       </div>
-      <div
-        className="rounded-2xl px-4 py-3"
-        style={{ background: "#fff", border: "1px solid #E5EAF2", color: "#374151", fontSize: 13 }}
-      >
-        <div style={{ fontWeight: 600, color: "#163A70" }}>模型处理中</div>
-        <div style={{ color: "#6B7280", fontSize: 12, marginTop: 4 }}>已耗时 {formatDuration(elapsed)}</div>
+      <div className="max-w-[82%] flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={onOpenActivity}
+          className="inline-flex items-center gap-1 self-start rounded-full px-2.5 py-1"
+          style={{ background: "#F3F6FB", border: "1px solid #E5EAF2", color: "#6B7280", fontSize: 12 }}
+        >
+          已思考 {formatDuration(elapsed)}
+          <ChevronRight size={12} />
+        </button>
+        <div
+          className="rounded-2xl px-4 py-3"
+          style={{ background: "#fff", border: "1px solid #E5EAF2", color: "#374151", fontSize: 13, boxShadow: "0 1px 3px rgba(15, 23, 42, 0.04)" }}
+        >
+          <div className="flex items-center gap-2 flex-wrap">
+            <Sparkles size={14} style={{ color: "#163A70" }} />
+            <div style={{ fontWeight: 600, color: "#111827" }}>正在组织回答</div>
+            <div style={{ color: "#9CA3AF", fontSize: 12 }}>用时 {formatDuration(elapsed)}</div>
+          </div>
+          <div style={{ color: "#6B7280", fontSize: 12, marginTop: 10, lineHeight: 1.8 }}>
+            {toolCount > 0
+              ? `已完成 ${toolCount} 次工具调用，正在整理证据并生成最终回答。`
+              : "正在读取工具结果并组织最终回答，请稍候。"}
+          </div>
+          <div
+            className="mt-3 inline-flex items-center gap-1 rounded-full px-2 py-1"
+            style={{ background: "#EFF6FF", color: "#163A70", fontSize: 11, fontWeight: 600 }}
+          >
+            <Activity size={11} />
+            {toolCount > 0 ? "查看工具执行" : "等待工具返回"}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -219,6 +268,7 @@ function MessageBubble({
   onReplay,
   onToggleSpeech,
   speaking,
+  liveElapsed,
 }: {
   message: Message;
   onSelect?: (message: Message) => void;
@@ -226,9 +276,29 @@ function MessageBubble({
   onReplay?: (message: Message) => void;
   onToggleSpeech?: (message: Message) => void;
   speaking?: boolean;
+  liveElapsed?: number;
 }) {
   const isUser = message.role === "user";
   const hasActivity = !isUser && ((message.toolTraces?.length ?? 0) > 0 || Boolean(message.report));
+  const hasStreamedContent = Boolean(message.content?.trim());
+  const runtimeMeta = !isUser
+    ? [
+        message.model,
+        message.pending
+          ? `已思考 ${formatDuration(liveElapsed ?? message.elapsedSeconds ?? 0)}`
+          : message.runtimeText,
+      ].filter(Boolean).join(" · ")
+    : "";
+
+  if (!isUser && message.pending && !hasStreamedContent) {
+    return (
+      <ThinkingBubble
+        elapsed={liveElapsed ?? message.elapsedSeconds ?? 0}
+        toolCount={message.toolTraces?.length ?? 0}
+        onOpenActivity={() => onSelect?.(message)}
+      />
+    );
+  }
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
@@ -303,9 +373,9 @@ function MessageBubble({
             </button>
           </div>
         )}
-        {!isUser && (message.model || message.runtimeText) && (
+        {!isUser && runtimeMeta && (
           <div style={{ fontSize: 11, color: "#9CA3AF" }}>
-            {[message.model, message.runtimeText].filter(Boolean).join(" · ")}
+            {runtimeMeta}
           </div>
         )}
         <div style={{ fontSize: 11, color: "#C4C9D4" }}>{message.timestamp}</div>
@@ -760,8 +830,11 @@ export function AgentPage() {
       {
         id: assistantMessageId,
         role: "assistant",
-        content: "正在生成...",
-        timestamp: "刚刚",
+        content: "",
+        timestamp: "思考中",
+        pending: true,
+        elapsedSeconds: 0,
+        toolTraces: [],
       },
     ]);
     if (!overrideQuestion) {
@@ -786,7 +859,16 @@ export function AgentPage() {
             upsertSessionCard(event.session_id, currentSessionTitle, 0);
           },
           onToolCall: call => {
-            setToolTraces(prev => [...prev, toToolTrace(call)]);
+            const trace = toToolTrace(call);
+            setToolTraces(prev => [...prev, trace]);
+            setMessages(prev => prev.map(item => (
+              item.id === assistantMessageId
+                ? {
+                    ...item,
+                    toolTraces: [...(item.toolTraces ?? []), trace],
+                  }
+                : item
+            )));
             setActivityOpen(true);
           },
           onDelta: chunk => {
@@ -794,7 +876,7 @@ export function AgentPage() {
               item.id === assistantMessageId
                 ? {
                     ...item,
-                    content: item.content === "正在生成..." ? chunk : `${item.content}${chunk}`,
+                    content: `${item.content}${chunk}`,
                   }
                 : item
             )));
@@ -811,6 +893,7 @@ export function AgentPage() {
               role: "assistant" as const,
               content: result.answer,
               timestamp: "刚刚",
+              pending: false,
               turnId: result.turn_id,
               toolTraces: result.tool_calls.map(toToolTrace),
               report: result.report ?? null,
@@ -861,7 +944,10 @@ export function AgentPage() {
         item.id === assistantMessageId
           ? {
               ...item,
+              pending: false,
               content: "本轮回答未完成，请查看右侧工具调用与证据记录。",
+              timestamp: "刚刚",
+              runtimeText: formatDuration(Math.max(1, Math.round((Date.now() - startedAt) / 1000))),
             }
           : item
       )));
@@ -1042,6 +1128,7 @@ export function AgentPage() {
                   onReplay={replayMessage}
                   onToggleSpeech={toggleSpeech}
                   speaking={speechState.speaking && speechState.messageId === message.id}
+                  liveElapsed={message.pending ? sendingElapsed : message.elapsedSeconds}
                 />
               ))}
 

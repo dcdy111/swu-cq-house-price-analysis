@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
+from Backend.agent.agent_service import AgentService
 from Backend.agent.deepseek_client import DeepSeekClient, DeepSeekInvocationError
 from Backend.extensions import db
 from Backend.models.agent import AgentSession, AgentToolCall, AgentTurn, GeneratedReport
@@ -228,6 +230,33 @@ def test_agent_session_groups_turns_and_tool_traces(client):
     assert payload["turn_count"] == 2
     assert len(payload["turns"]) == 2
     assert all(turn["tool_calls"] for turn in payload["turns"])
+
+
+def test_agent_session_creation_handles_duplicate_race(app, monkeypatch):
+    with app.app_context():
+        existing = AgentSession(session_id="race-session", title="已创建会话")
+        state = {"get_calls": 0, "commit_calls": 0}
+        original_get = db.session.get
+
+        def fake_get(model, key):
+            if model is AgentSession and key == "race-session":
+                state["get_calls"] += 1
+                if state["get_calls"] == 1:
+                    return None
+                return existing
+            return original_get(model, key)
+
+        def fake_commit():
+            state["commit_calls"] += 1
+            raise IntegrityError("INSERT INTO agent_sessions ...", {"session_id": "race-session"}, Exception("duplicate"))
+
+        monkeypatch.setattr(db.session, "get", fake_get)
+        monkeypatch.setattr(db.session, "commit", fake_commit)
+
+        session = AgentService._ensure_session("race-session", "并发首问")
+
+        assert session is existing
+        assert state["commit_calls"] == 1
 
 
 def test_agent_session_crud_endpoints(client):
