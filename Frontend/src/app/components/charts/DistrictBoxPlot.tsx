@@ -48,9 +48,9 @@ export function DistrictBoxPlot({ source = [] }: { source?: DistrictBoxItem[] })
 
   return (
     <ResponsiveContainer width="100%" height={220}>
-      <ComposedChart data={data} margin={{ left: 5, right: 10, top: 5, bottom: 24 }}>
+      <ComposedChart data={data} margin={{ left: 5, right: 10, top: 5, bottom: 36 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#E5EAF2" />
-        <XAxis dataKey="name" interval={0} angle={-18} textAnchor="end" height={46} tick={{ fontSize: 11, fill: "#6B7280" }} />
+        <XAxis dataKey="name" interval={0} angle={-42} textAnchor="end" height={64} tick={{ fontSize: 11, fill: "#6B7280" }} />
         <YAxis tickFormatter={v => `${(v/1000).toFixed(0)}k`} tick={{ fontSize: 11, fill: "#9CA3AF" }} width={38} />
         <Tooltip
           labelFormatter={(_label, payload) => payload?.[0]?.payload?.district ?? ""}
