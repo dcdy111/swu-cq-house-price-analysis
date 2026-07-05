@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from statistics import mean, median
 from typing import Iterable
 
 from Backend.extensions import db
 from Backend.models.analysis import AnalysisJob, ModelResult
 from Backend.models.listing import Listing
+from Backend.models.snapshot import ListingSnapshot
 from Backend.services.dashboard_service import normalize_district_name
 
 
@@ -32,7 +33,12 @@ CATEGORICAL_FEATURE_CONFIG = [
     ("decoration_bucket", "装修", 8),
     ("floor_level", "楼层", 4),
 ]
-CLUSTER_LABELS = ["经济型", "刚需均衡型", "改善型", "高价稀缺型"]
+DEFAULT_CLUSTER_LABELS = ["主流挂牌层", "均衡层", "改善层", "高价值层"]
+CLUSTER_LABEL_SETS = {
+    2: ["主流挂牌层", "高价值层"],
+    3: ["刚需层", "改善层", "高价值层"],
+    4: ["刚需层", "均衡层", "改善层", "高价值稀缺层"],
+}
 
 
 def _round(value, digits: int = 2):
@@ -53,6 +59,13 @@ def _numeric_or_none(value) -> float | None:
 
 def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator if abs(denominator) > 1e-9 else 0.0
+
+
+def _stddev(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    value_mean = mean(values)
+    return math.sqrt(mean((value - value_mean) ** 2 for value in values))
 
 
 def _quantile(values: list[float], q: float) -> float | None:
@@ -106,7 +119,7 @@ class AnalysisService:
             "eda": "EDA 探索",
             "regression": "挂牌价回归",
             "tune": "参数搜索",
-            "cluster": "聚类分层",
+            "cluster": "价值分层",
             "anomaly": "异常检测",
         }
         return labels.get(job_type, "分析任务")
@@ -324,6 +337,108 @@ class AnalysisService:
             "results": [item.to_dict() for item in result_items],
             "jobs_by_type": jobs_by_type,
             "note": "按 result_type 读取最近成功结果；用于本地演示时避免最新单项任务覆盖其他分析页签。",
+        }
+
+    @staticmethod
+    def snapshot_insights(days: int = 90) -> dict:
+        days = min(365, max(7, int(days or 90)))
+        now = datetime.utcnow()
+        window_start = now - timedelta(days=days)
+        rows = (
+            db.session.query(
+                ListingSnapshot.id,
+                ListingSnapshot.listing_id,
+                ListingSnapshot.total_price,
+                ListingSnapshot.unit_price,
+                ListingSnapshot.snapshot_at,
+                Listing.title,
+                Listing.district,
+                Listing.community,
+            )
+            .join(Listing, Listing.id == ListingSnapshot.listing_id)
+            .filter(Listing.status.in_(VALID_STATUSES))
+            .order_by(ListingSnapshot.listing_id.asc(), ListingSnapshot.snapshot_at.asc(), ListingSnapshot.id.asc())
+            .all()
+        )
+
+        events = []
+        tracked_listing_count = 0
+        current_listing_id = None
+        snapshot_count = 0
+        has_snapshot_in_window = False
+        previous_row = None
+
+        def finalize_listing():
+            nonlocal tracked_listing_count, snapshot_count, has_snapshot_in_window
+            if snapshot_count >= 2 and has_snapshot_in_window:
+                tracked_listing_count += 1
+
+        for row in rows:
+            if row.listing_id != current_listing_id:
+                if current_listing_id is not None:
+                    finalize_listing()
+                current_listing_id = row.listing_id
+                snapshot_count = 0
+                has_snapshot_in_window = False
+                previous_row = None
+
+            snapshot_count += 1
+            if row.snapshot_at and row.snapshot_at >= window_start:
+                has_snapshot_in_window = True
+
+            if previous_row is not None:
+                event = AnalysisService._build_snapshot_event(previous_row, row)
+                if event is not None and row.snapshot_at and row.snapshot_at >= window_start:
+                    events.append(event)
+            previous_row = row
+
+        if current_listing_id is not None:
+            finalize_listing()
+
+        abs_change_rates = [
+            float(item["abs_change_rate"])
+            for item in events
+            if item.get("abs_change_rate") is not None
+        ]
+        changed_listing_ids = {int(item["listing_id"]) for item in events}
+        price_up_count = sum(1 for item in events if item["direction"] == "up")
+        price_down_count = sum(1 for item in events if item["direction"] == "down")
+        series = AnalysisService._snapshot_series(events)
+        top_districts = AnalysisService._snapshot_top_districts(events)
+        samples = sorted(events, key=lambda item: item["snapshot_at"], reverse=True)[:12]
+
+        if not events:
+            note = (
+                f"最近 {days} 天内暂未识别到足够的连续调价事件。当前页面先展示快照差分统计口径，"
+                "不展示未来价格预测结论，这不是未来房价预测。"
+            )
+        elif len(events) < 10:
+            note = (
+                f"最近 {days} 天识别到 {len(events)} 条真实调价事件。当前样本可用于观察调价行为，"
+                "但不适合外推出未来房价走势，这不是未来房价预测。"
+            )
+        else:
+            note = (
+                f"最近 {days} 天共识别到 {len(events)} 条连续快照调价事件；结果用于观察挂牌价调整行为，"
+                "不是未来房价预测。平均调价幅度按绝对变动率统计。"
+            )
+
+        return {
+            "window_days": days,
+            "observed_from": window_start.isoformat(sep=" "),
+            "observed_to": now.isoformat(sep=" "),
+            "kpis": {
+                "tracked_listing_count": tracked_listing_count,
+                "changed_listing_count": len(changed_listing_ids),
+                "price_up_count": price_up_count,
+                "price_down_count": price_down_count,
+                "avg_change_rate": _round(mean(abs_change_rates), 2) if abs_change_rates else None,
+                "median_change_rate": _round(median(abs_change_rates), 2) if abs_change_rates else None,
+            },
+            "series": series,
+            "top_districts": top_districts,
+            "samples": [AnalysisService._serialize_snapshot_event(item) for item in samples],
+            "note": note,
         }
 
     @staticmethod
@@ -574,13 +689,178 @@ class AnalysisService:
         return result
 
     @staticmethod
+    def _cluster_labels_for_count(cluster_count: int) -> list[str]:
+        if cluster_count in CLUSTER_LABEL_SETS:
+            return CLUSTER_LABEL_SETS[cluster_count]
+        fallback = DEFAULT_CLUSTER_LABELS[: max(0, cluster_count)]
+        while len(fallback) < cluster_count:
+            fallback.append(f"价值层级{len(fallback) + 1}")
+        return fallback
+
+    @staticmethod
+    def _cluster_label_map(ordered_clusters: list[int]) -> dict[int, str]:
+        labels = AnalysisService._cluster_labels_for_count(len(ordered_clusters))
+        return {
+            cluster_id: labels[min(index, len(labels) - 1)]
+            for index, cluster_id in enumerate(ordered_clusters)
+        }
+
+    @staticmethod
+    def _snapshot_metric_delta(previous_row, current_row) -> dict | None:
+        previous_unit_price = _numeric_or_none(previous_row.unit_price)
+        current_unit_price = _numeric_or_none(current_row.unit_price)
+        if (
+            previous_unit_price is not None
+            and current_unit_price is not None
+            and abs(previous_unit_price - current_unit_price) > 0.001
+        ):
+            change_rate = (
+                _safe_div(current_unit_price - previous_unit_price, previous_unit_price) * 100
+                if abs(previous_unit_price) > 1e-9
+                else None
+            )
+            return {
+                "metric": "unit_price",
+                "previous": previous_unit_price,
+                "current": current_unit_price,
+                "change_rate": change_rate,
+            }
+
+        previous_total_price = _numeric_or_none(previous_row.total_price)
+        current_total_price = _numeric_or_none(current_row.total_price)
+        if (
+            previous_total_price is not None
+            and current_total_price is not None
+            and abs(previous_total_price - current_total_price) > 0.001
+        ):
+            change_rate = (
+                _safe_div(current_total_price - previous_total_price, previous_total_price) * 100
+                if abs(previous_total_price) > 1e-9
+                else None
+            )
+            return {
+                "metric": "total_price",
+                "previous": previous_total_price,
+                "current": current_total_price,
+                "change_rate": change_rate,
+            }
+        return None
+
+    @staticmethod
+    def _build_snapshot_event(previous_row, current_row) -> dict | None:
+        delta = AnalysisService._snapshot_metric_delta(previous_row, current_row)
+        if delta is None:
+            return None
+
+        change_interval_days = None
+        if previous_row.snapshot_at and current_row.snapshot_at:
+            change_interval_days = max(
+                0.0,
+                (current_row.snapshot_at - previous_row.snapshot_at).total_seconds() / 86400,
+            )
+        direction = "up" if delta["current"] > delta["previous"] else "down"
+        district = normalize_district_name(getattr(current_row, "district", None))
+        return {
+            "listing_id": int(current_row.listing_id),
+            "title": str(getattr(current_row, "title", "") or ""),
+            "district": district,
+            "community": str(getattr(current_row, "community", "") or ""),
+            "previous_total_price": _round(previous_row.total_price, 2),
+            "current_total_price": _round(current_row.total_price, 2),
+            "previous_unit_price": _round(previous_row.unit_price, 2),
+            "current_unit_price": _round(current_row.unit_price, 2),
+            "metric": delta["metric"],
+            "change_rate": _round(delta["change_rate"], 2) if delta["change_rate"] is not None else None,
+            "abs_change_rate": _round(abs(delta["change_rate"]), 2) if delta["change_rate"] is not None else None,
+            "direction": direction,
+            "snapshot_at": current_row.snapshot_at,
+            "change_interval_days": _round(change_interval_days, 2) if change_interval_days is not None else None,
+        }
+
+    @staticmethod
+    def _snapshot_series(events: list[dict]) -> list[dict]:
+        grouped: dict[str, list[dict]] = defaultdict(list)
+        for item in events:
+            if item.get("snapshot_at") is None:
+                continue
+            grouped[item["snapshot_at"].strftime("%Y-%m-%d")].append(item)
+
+        rows = []
+        for date_key in sorted(grouped.keys()):
+            items = grouped[date_key]
+            abs_rates = [float(item["abs_change_rate"]) for item in items if item.get("abs_change_rate") is not None]
+            rows.append(
+                {
+                    "date": date_key,
+                    "event_count": len(items),
+                    "price_up_count": sum(1 for item in items if item["direction"] == "up"),
+                    "price_down_count": sum(1 for item in items if item["direction"] == "down"),
+                    "avg_change_rate": _round(mean(abs_rates), 2) if abs_rates else None,
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _snapshot_top_districts(events: list[dict]) -> list[dict]:
+        grouped: dict[str, list[dict]] = defaultdict(list)
+        for item in events:
+            grouped[str(item.get("district") or "待复核")].append(item)
+
+        rows = []
+        for district, items in grouped.items():
+            abs_rates = [float(item["abs_change_rate"]) for item in items if item.get("abs_change_rate") is not None]
+            intervals = [
+                float(item["change_interval_days"])
+                for item in items
+                if item.get("change_interval_days") is not None
+            ]
+            rows.append(
+                {
+                    "district": district,
+                    "event_count": len(items),
+                    "changed_listing_count": len({int(item["listing_id"]) for item in items}),
+                    "price_up_count": sum(1 for item in items if item["direction"] == "up"),
+                    "price_down_count": sum(1 for item in items if item["direction"] == "down"),
+                    "avg_abs_change_rate": _round(mean(abs_rates), 2) if abs_rates else None,
+                    "avg_change_interval_days": _round(mean(intervals), 2) if intervals else None,
+                }
+            )
+        rows.sort(
+            key=lambda item: (
+                int(item["event_count"]),
+                float(item["avg_abs_change_rate"] or 0),
+            ),
+            reverse=True,
+        )
+        return rows[:10]
+
+    @staticmethod
+    def _serialize_snapshot_event(event: dict) -> dict:
+        return {
+            "listing_id": int(event["listing_id"]),
+            "title": event["title"],
+            "district": event["district"],
+            "community": event["community"],
+            "previous_total_price": event["previous_total_price"],
+            "current_total_price": event["current_total_price"],
+            "previous_unit_price": event["previous_unit_price"],
+            "current_unit_price": event["current_unit_price"],
+            "metric": event["metric"],
+            "change_rate": event["change_rate"],
+            "abs_change_rate": event["abs_change_rate"],
+            "direction": event["direction"],
+            "snapshot_at": event["snapshot_at"].isoformat(sep=" ") if event.get("snapshot_at") else None,
+            "change_interval_days": event["change_interval_days"],
+        }
+
+    @staticmethod
     def _assign_cluster(records: list[dict], item: dict) -> dict:
         if len(records) < 4:
             return {
                 "label": "样本不足",
                 "algorithm": "none",
                 "cluster_count": 0,
-                "note": "当前样本不足，暂不输出稳定的聚类归类结果。",
+                "note": "当前样本不足，暂不输出稳定的价值分层结果。",
             }
         try:
             return AnalysisService._sklearn_cluster_assignment(records, item)
@@ -622,7 +902,7 @@ class AnalysisService:
         for row, cluster_id in zip(records, labels):
             grouped[int(cluster_id)].append(row)
         ordered_clusters = sorted(grouped.keys(), key=lambda cid: mean(row["unit_price"] for row in grouped[cid]))
-        label_map = {cluster_id: CLUSTER_LABELS[min(index, len(CLUSTER_LABELS) - 1)] for index, cluster_id in enumerate(ordered_clusters)}
+        label_map = AnalysisService._cluster_label_map(ordered_clusters)
         assigned_cluster = int(model.predict([input_scaled])[0])
         raw_center = scaler.inverse_transform([model.cluster_centers_[assigned_cluster]])[0]
         profile_rows = grouped[assigned_cluster]
@@ -649,7 +929,7 @@ class AnalysisService:
                 "house_age": _round(raw_center[3], 2) if use_house_age else None,
             },
             "profile": profile,
-            "note": f"按{'、'.join(feature_names[:3])}等特征自动归入“{label_map[assigned_cluster]}”分层。",
+            "note": f"按{'、'.join(feature_names[:3])}等特征自动归入“{label_map[assigned_cluster]}”价值层级。",
         }
 
     @staticmethod
@@ -686,7 +966,7 @@ class AnalysisService:
         for row, cluster_id in zip(records, assignments):
             grouped[int(cluster_id)].append(row)
         ordered_clusters = sorted(grouped.keys(), key=lambda cid: mean(row["unit_price"] for row in grouped[cid]))
-        label_map = {cluster_id: CLUSTER_LABELS[min(index, len(CLUSTER_LABELS) - 1)] for index, cluster_id in enumerate(ordered_clusters)}
+        label_map = AnalysisService._cluster_label_map(ordered_clusters)
         if assigned_cluster not in grouped or not grouped[assigned_cluster]:
             assigned_cluster = min(
                 grouped.keys(),
@@ -715,7 +995,7 @@ class AnalysisService:
                 "house_age": _round(raw_center[2], 2) if use_house_age else None,
             },
             "profile": profile,
-            "note": f"按挂牌单价、面积等特征自动归入“{label_map[assigned_cluster]}”分层。",
+            "note": f"按挂牌单价、面积等特征自动归入“{label_map[assigned_cluster]}”价值层级。",
         }
 
     @staticmethod
@@ -925,6 +1205,14 @@ class AnalysisService:
                         "rmse": None,
                         "r2": None,
                         "mape": None,
+                        "cv_scheme": "insufficient_sample",
+                        "cv_folds": 0,
+                        "cv_mae_mean": None,
+                        "cv_mae_std": None,
+                        "cv_rmse_mean": None,
+                        "cv_rmse_std": None,
+                        "cv_r2_mean": None,
+                        "cv_r2_std": None,
                     },
                     "artifacts": {"feature_importance": [], "predictions": [], "model_comparison": []},
                     "evidence": {
@@ -963,8 +1251,15 @@ class AnalysisService:
                         "rmse": None,
                         "r2": None,
                         "mape": None,
+                        "cv_scheme": "insufficient_sample",
                         "search_candidates": 0,
                         "cv_folds": 0,
+                        "cv_mae_mean": None,
+                        "cv_mae_std": None,
+                        "cv_rmse_mean": None,
+                        "cv_rmse_std": None,
+                        "cv_r2_mean": None,
+                        "cv_r2_std": None,
                     },
                     "artifacts": {
                         "feature_importance": [],
@@ -1001,6 +1296,133 @@ class AnalysisService:
             return [result]
 
     @staticmethod
+    def _cross_validate_splits(records: list[dict]) -> tuple[list[tuple[list[int], list[int]]], str]:
+        from sklearn.model_selection import GroupKFold, KFold
+
+        total_count = len(records)
+        if total_count < 2:
+            return [], "insufficient_sample"
+
+        groups = [AnalysisService._normalize_category(item.get("community")) for item in records]
+        unique_groups = len(set(groups))
+        if unique_groups >= 2:
+            n_splits = min(5, unique_groups)
+            if n_splits >= 2:
+                try:
+                    splitter = GroupKFold(n_splits=n_splits)
+                    splits = [
+                        (list(train_index), list(test_index))
+                        for train_index, test_index in splitter.split(list(range(total_count)), groups=groups)
+                    ]
+                    if splits:
+                        return splits, f"GroupKFold({len(splits)}, group=community)"
+                except ValueError:
+                    pass
+
+        n_splits = min(5, total_count)
+        if n_splits < 2:
+            return [], "insufficient_sample"
+        splitter = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        splits = [
+            (list(train_index), list(test_index))
+            for train_index, test_index in splitter.split(list(range(total_count)))
+        ]
+        return splits, f"KFold({len(splits)}, shuffle=True, random_state=42)"
+
+    @staticmethod
+    def _cross_validate_estimator(records: list[dict], estimator) -> dict:
+        from sklearn.base import clone
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+        splits, cv_scheme = AnalysisService._cross_validate_splits(records)
+        if not splits:
+            return {
+                "cv_scheme": cv_scheme,
+                "cv_folds": 0,
+                "cv_mae_mean": None,
+                "cv_mae_std": None,
+                "cv_rmse_mean": None,
+                "cv_rmse_std": None,
+                "cv_r2_mean": None,
+                "cv_r2_std": None,
+            }
+
+        maes = []
+        rmses = []
+        r2s = []
+        for train_index, test_index in splits:
+            train_records = [records[index] for index in train_index]
+            test_records = [records[index] for index in test_index]
+            encoder = AnalysisService._build_feature_encoder(train_records)
+            x_train = [AnalysisService._features_for_item(item, encoder) for item in train_records]
+            y_train = [item["unit_price"] for item in train_records]
+            x_test = [AnalysisService._features_for_item(item, encoder) for item in test_records]
+            y_test = [item["unit_price"] for item in test_records]
+            model = clone(estimator)
+            model.fit(x_train, y_train)
+            y_pred = model.predict(x_test)
+            maes.append(float(mean_absolute_error(y_test, y_pred)))
+            rmses.append(float(math.sqrt(mean_squared_error(y_test, y_pred))))
+            r2s.append(float(r2_score(y_test, y_pred)))
+
+        return {
+            "cv_scheme": cv_scheme,
+            "cv_folds": len(splits),
+            "cv_mae_mean": _round(mean(maes), 2),
+            "cv_mae_std": _round(_stddev(maes), 2),
+            "cv_rmse_mean": _round(mean(rmses), 2),
+            "cv_rmse_std": _round(_stddev(rmses), 2),
+            "cv_r2_mean": _round(mean(r2s), 4),
+            "cv_r2_std": _round(_stddev(r2s), 4),
+        }
+
+    @staticmethod
+    def _cross_validate_ridge(records: list[dict]) -> dict:
+        splits, cv_scheme = AnalysisService._cross_validate_splits(records)
+        if not splits:
+            return {
+                "cv_scheme": cv_scheme,
+                "cv_folds": 0,
+                "cv_mae_mean": None,
+                "cv_mae_std": None,
+                "cv_rmse_mean": None,
+                "cv_rmse_std": None,
+                "cv_r2_mean": None,
+                "cv_r2_std": None,
+            }
+
+        maes = []
+        rmses = []
+        r2s = []
+        for train_index, test_index in splits:
+            train_records = [records[index] for index in train_index]
+            test_records = [records[index] for index in test_index]
+            model = AnalysisService._fit_ridge(train_records)
+            predictions = AnalysisService._predict(model, test_records)
+            actual = [item["unit_price"] for item in test_records]
+            predicted = [item["predicted"] for item in predictions]
+            mae = mean(abs(a - p) for a, p in zip(actual, predicted))
+            rmse = math.sqrt(mean((a - p) ** 2 for a, p in zip(actual, predicted)))
+            actual_mean = mean(actual)
+            sse = sum((a - p) ** 2 for a, p in zip(actual, predicted))
+            sst = sum((a - actual_mean) ** 2 for a in actual)
+            r2 = 1 - _safe_div(sse, sst) if sst > 1e-9 else 0.0
+            maes.append(float(mae))
+            rmses.append(float(rmse))
+            r2s.append(float(r2))
+
+        return {
+            "cv_scheme": cv_scheme,
+            "cv_folds": len(splits),
+            "cv_mae_mean": _round(mean(maes), 2),
+            "cv_mae_std": _round(_stddev(maes), 2),
+            "cv_rmse_mean": _round(mean(rmses), 2),
+            "cv_rmse_std": _round(_stddev(rmses), 2),
+            "cv_r2_mean": _round(mean(r2s), 4),
+            "cv_r2_std": _round(_stddev(r2s), 4),
+        }
+
+    @staticmethod
     def _ridge_regression_result(records: list[dict], source_sample_count: int | None = None, exclusion: dict | None = None) -> dict:
         source_sample_count = source_sample_count or len(records)
         exclusion = exclusion or AnalysisService._empty_exclusion()
@@ -1022,6 +1444,7 @@ class AnalysisService:
         mape = mean(abs(_safe_div(a - p, a)) for a, p in zip(actual, predicted)) * 100
 
         importance = AnalysisService._feature_importance(model, train_records)
+        cv_metrics = AnalysisService._cross_validate_ridge(records)
         return {
             "result_type": "regression",
             "model_name": "Ridge 线性基线",
@@ -1040,6 +1463,7 @@ class AnalysisService:
                 "rmse": _round(rmse, 2),
                 "r2": _round(r2, 4),
                 "mape": _round(mape, 2),
+                **cv_metrics,
             },
             "artifacts": {
                 "feature_importance": importance,
@@ -1211,6 +1635,7 @@ class AnalysisService:
             best=best,
             comparison=comparison,
             encoder=encoder,
+            regression_records=records,
             test_records=test_records,
             y_test=y_test,
             exclusion=exclusion,
@@ -1345,6 +1770,7 @@ class AnalysisService:
             best=best,
             comparison=comparison,
             encoder=encoder,
+            regression_records=records,
             test_records=test_records,
             y_test=y_test,
             exclusion=exclusion,
@@ -1498,6 +1924,7 @@ class AnalysisService:
         best: dict,
         comparison: list[dict],
         encoder: dict,
+        regression_records: list[dict],
         test_records: list[dict],
         y_test: list[float],
         exclusion: dict,
@@ -1523,11 +1950,12 @@ class AnalysisService:
             [AnalysisService._features_for_item(item, encoder) for item in test_records],
             y_test,
         )
+        cv_metrics = AnalysisService._cross_validate_estimator(regression_records, best["model"])
         return {
             "result_type": "regression",
             "model_name": best["model_name"],
             "summary": "已完成 RandomForest、GBDT、HistGBDT 多模型对比，并自动选择测试集 R² 最优模型作为当前挂牌单价辅助估计模型。",
-            "metrics": best["metrics"],
+            "metrics": {**best["metrics"], **cv_metrics},
             "artifacts": {
                 "feature_importance": importance_items[:30],
                 "predictions": predictions,
@@ -1537,6 +1965,7 @@ class AnalysisService:
                 "excluded_samples": exclusion["samples"],
                 "exclusion_policy": exclusion["policy"],
                 "selection_rule": "按测试集 R² 降序择优；R² 相同则优先 RMSE/MAE 更低的模型。",
+                "cv_scheme": cv_metrics["cv_scheme"],
                 "model_note": "该模型用于解释挂牌价影响因素和辅助估价，不代表成交价预测。",
             },
             "evidence": {
@@ -1549,6 +1978,7 @@ class AnalysisService:
                 "algorithm": best["algorithm"],
                 "candidate_algorithms": [item["algorithm"] for item in comparison],
                 "split_rule": "train_test_split(test_size=0.2, random_state=42)，保证结果可复现。",
+                "cv_scheme": cv_metrics["cv_scheme"],
             },
         }
 
@@ -1640,8 +2070,8 @@ class AnalysisService:
         if len(records) < 4:
             return {
                 "result_type": "cluster",
-                "model_name": "KMeans 价值分层",
-                "summary": "可用样本少于 4 条，暂不进行聚类分层。",
+                "model_name": "KMeans 房源价值分层",
+                "summary": "可用样本少于 4 条，暂不进行房源价值分层。",
                 "metrics": {"status": "insufficient_sample", "sample_count": len(records), "cluster_count": 0},
                 "artifacts": {"clusters": [], "points": []},
                 "evidence": {
@@ -1692,7 +2122,7 @@ class AnalysisService:
             grouped[int(cluster_id)].append(item)
 
         ordered_clusters = sorted(grouped.keys(), key=lambda cid: mean(item["unit_price"] for item in grouped[cid]))
-        label_map = {cluster_id: CLUSTER_LABELS[min(index, len(CLUSTER_LABELS) - 1)] for index, cluster_id in enumerate(ordered_clusters)}
+        label_map = AnalysisService._cluster_label_map(ordered_clusters)
 
         profiles = []
         for cluster_id in ordered_clusters:
@@ -1738,8 +2168,8 @@ class AnalysisService:
 
         return {
             "result_type": "cluster",
-            "model_name": "sklearn KMeans 价值分层",
-            "summary": f"按{ '、'.join(feature_names[:3]) }等特征自动选择 {k} 个价值层级，轮廓系数为 {_round(score, 4)}。",
+            "model_name": "KMeans 房源价值分层",
+            "summary": f"按{ '、'.join(feature_names[:3]) }等特征自动选择 {k} 个房源价值层级，轮廓系数为 {_round(score, 4)}。",
             "metrics": {
                 "status": "ok",
                 "sample_count": len(records),
@@ -1754,7 +2184,7 @@ class AnalysisService:
                 "house_age_policy": AnalysisService._house_age_policy(use_house_age, house_age_fill),
                 "algorithm": "sklearn.cluster.KMeans",
                 "scaler": "sklearn.preprocessing.StandardScaler",
-                "selection_rule": "在 k=2..4 中按 silhouette_score 选择最优分层数。",
+                "selection_rule": "在 k=2..4 中按 silhouette_score 选择最优价值层级数。",
             },
         }
 
@@ -1767,7 +2197,7 @@ class AnalysisService:
             grouped[cluster_id].append(item)
 
         ordered_clusters = sorted(grouped.keys(), key=lambda cid: mean(item["unit_price"] for item in grouped[cid]))
-        label_map = {cluster_id: CLUSTER_LABELS[min(index, len(CLUSTER_LABELS) - 1)] for index, cluster_id in enumerate(ordered_clusters)}
+        label_map = AnalysisService._cluster_label_map(ordered_clusters)
 
         profiles = []
         for cluster_id in ordered_clusters:
@@ -1801,8 +2231,8 @@ class AnalysisService:
 
         return {
             "result_type": "cluster",
-            "model_name": "KMeans 价值分层",
-            "summary": f"按{ '、'.join(feature_names) }将有效样本划分为 {k} 类，用于识别不同价值层级。",
+            "model_name": "KMeans 房源价值分层",
+            "summary": f"按{ '、'.join(feature_names) }将有效样本划分为 {k} 个房源价值层级。",
             "metrics": {"status": "ok", "sample_count": len(records), "cluster_count": k, "iterations": 15},
             "artifacts": {"clusters": profiles, "points": points, "centers": centers},
             "evidence": {

@@ -65,6 +65,15 @@ def latest_results_by_type():
     return api_success(AnalysisService.latest_results_by_type())
 
 
+@bp.get("/snapshot-insights")
+def snapshot_insights():
+    try:
+        days = int(request.args.get("days", 90))
+    except (TypeError, ValueError):
+        return api_error("days 必须是整数", status_code=400)
+    return api_success(AnalysisService.snapshot_insights(days=days))
+
+
 @bp.get("/jobs/<int:job_id>")
 def get_job(job_id: int):
     job = AnalysisService.get_job(job_id)

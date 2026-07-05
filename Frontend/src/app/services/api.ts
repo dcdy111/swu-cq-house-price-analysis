@@ -360,6 +360,59 @@ export interface AnalysisSimulationResult {
   evidence: Record<string, any>;
 }
 
+export interface SnapshotInsightSeriesItem {
+  date: string;
+  event_count: number;
+  price_up_count: number;
+  price_down_count: number;
+  avg_change_rate?: number | null;
+}
+
+export interface SnapshotInsightDistrictItem {
+  district: string;
+  event_count: number;
+  changed_listing_count: number;
+  price_up_count: number;
+  price_down_count: number;
+  avg_abs_change_rate?: number | null;
+  avg_change_interval_days?: number | null;
+}
+
+export interface SnapshotInsightSample {
+  listing_id: number;
+  title: string;
+  district: string;
+  community?: string;
+  previous_total_price?: number | null;
+  current_total_price?: number | null;
+  previous_unit_price?: number | null;
+  current_unit_price?: number | null;
+  metric: "unit_price" | "total_price" | string;
+  change_rate?: number | null;
+  abs_change_rate?: number | null;
+  direction: "up" | "down" | string;
+  snapshot_at?: string | null;
+  change_interval_days?: number | null;
+}
+
+export interface SnapshotInsightsResult {
+  window_days: number;
+  observed_from?: string | null;
+  observed_to?: string | null;
+  kpis: {
+    tracked_listing_count: number;
+    changed_listing_count: number;
+    price_up_count: number;
+    price_down_count: number;
+    avg_change_rate?: number | null;
+    median_change_rate?: number | null;
+  };
+  series: SnapshotInsightSeriesItem[];
+  top_districts: SnapshotInsightDistrictItem[];
+  samples: SnapshotInsightSample[];
+  note: string;
+}
+
 export interface AgentToolCall {
   id: number;
   session_id: string;
@@ -627,6 +680,7 @@ export interface LayoutDistributionResult {
 const API_BASE = "";
 const TOKEN_KEY = "swu-auth-token";
 const USER_KEY = "swu-auth-user";
+export const AUTH_EXPIRED_EVENT = "swu-auth-expired";
 
 export function getAuthToken() {
   return localStorage.getItem(TOKEN_KEY) || "";
@@ -639,6 +693,13 @@ export function hasAuthToken() {
 export function clearAuthToken() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+}
+
+function notifyAuthExpired() {
+  clearAuthToken();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
 }
 
 export function saveAuth(payload: LoginResponse) {
@@ -698,6 +759,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     };
     error.data = payload.data;
     error.status = response.status;
+    if (response.status === 401 && token) {
+      notifyAuthExpired();
+    }
     throw error;
   }
   return payload.data;
@@ -722,6 +786,9 @@ async function streamRequest(
   const contentType = response.headers.get("Content-Type") || "";
   if (!response.ok || !contentType.toLowerCase().includes("text/event-stream")) {
     const text = await response.text();
+    if (response.status === 401 && token) {
+      notifyAuthExpired();
+    }
     throw new Error(text || `流式请求失败: ${response.status}`);
   }
 
@@ -965,6 +1032,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+  getSnapshotInsights(days = 90) {
+    return request<SnapshotInsightsResult>(`/api/analysis/snapshot-insights?days=${days}`);
   },
   streamAgentChat(payload: { session_id?: string; question: string }, handlers: AgentChatStreamHandlers) {
     return streamRequest("/api/agent/chat/stream", payload, handlers);

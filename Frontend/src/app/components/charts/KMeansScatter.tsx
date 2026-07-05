@@ -1,7 +1,7 @@
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const CLUSTER_COLORS = ["#4F7DBD", "#163A70", "#E67E22", "#16A34A"];
-const CLUSTER_LABELS = ["经济型", "中端", "中高端", "豪华型"];
+const CLUSTER_LABELS = ["主流挂牌层", "均衡层", "改善层", "高价值层"];
 
 interface KMeansPoint {
   x: number;
@@ -12,7 +12,7 @@ interface KMeansPoint {
 
 export function KMeansScatter({ data = [] }: { data?: KMeansPoint[] }) {
   if (data.length === 0) {
-    return <div className="flex h-[300px] items-center justify-center" style={{ fontSize: 12, color: "#9CA3AF" }}>暂无聚类散点数据</div>;
+    return <div className="flex h-[300px] items-center justify-center" style={{ fontSize: 12, color: "#9CA3AF" }}>暂无价值分层散点数据</div>;
   }
 
   const clusterIds = Array.from(new Set(data.map(item => item.cluster))).sort((a, b) => a - b);

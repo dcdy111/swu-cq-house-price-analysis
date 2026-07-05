@@ -239,10 +239,10 @@ class ReportExportService:
 
         if cluster is not None:
             metrics = cluster.metrics or {}
-            story.append(Paragraph("四、聚类分层", h2))
+            story.append(Paragraph("四、房源价值分层", h2))
             for line in [
                 f"算法：{metrics.get('algorithm')}",
-                f"分层数：{metrics.get('cluster_count')}",
+                f"价值层级数：{metrics.get('cluster_count')}",
                 f"轮廓系数：{metrics.get('silhouette_score')}",
             ]:
                 story.append(Paragraph("• " + ReportExportService._escape(line), base))

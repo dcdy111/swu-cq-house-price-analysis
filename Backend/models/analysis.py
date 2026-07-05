@@ -73,7 +73,7 @@ class AnalysisJob(db.Model):
             "eda": "EDA 探索",
             "regression": "挂牌价回归",
             "tune": "参数搜索",
-            "cluster": "聚类分层",
+            "cluster": "价值分层",
             "anomaly": "异常检测",
         }
         return labels.get(self.job_type, self.job_type or "分析任务")

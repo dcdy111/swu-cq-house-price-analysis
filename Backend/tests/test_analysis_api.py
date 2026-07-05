@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from Backend.extensions import db
 from Backend.models.analysis import AnalysisJob, ModelResult
 from Backend.services.analysis_service import AnalysisService
@@ -55,6 +57,61 @@ def seed_analysis_data():
     db.session.commit()
 
 
+def seed_snapshot_insights_data():
+    base_time = datetime(2026, 7, 1, 9, 0, 0)
+    listing_rows = [
+        {
+            "source": "fang",
+            "source_listing_id": "snapshot-a",
+            "title": "渝北快照样本A",
+            "link": "https://example.com/snapshot/a",
+            "district": "渝北",
+            "community": "快照小区A",
+            "total_price": 100,
+            "unit_price": 10000,
+            "area": 100,
+            "layout": "3室2厅",
+            "build_year": 2018,
+        },
+        {
+            "source": "fang",
+            "source_listing_id": "snapshot-b",
+            "title": "南岸快照样本B",
+            "link": "https://example.com/snapshot/b",
+            "district": "南岸",
+            "community": "快照小区B",
+            "total_price": 120,
+            "unit_price": 12000,
+            "area": 100,
+            "layout": "3室2厅",
+            "build_year": 2017,
+        },
+        {
+            "source": "fang",
+            "source_listing_id": "snapshot-c",
+            "title": "江北单快照样本C",
+            "link": "https://example.com/snapshot/c",
+            "district": "江北",
+            "community": "快照小区C",
+            "total_price": 90,
+            "unit_price": 9000,
+            "area": 100,
+            "layout": "2室1厅",
+            "build_year": 2015,
+        },
+    ]
+
+    ListingService.upsert_listing(listing_rows[0], seen_at=base_time)
+    ListingService.upsert_listing({**listing_rows[0], "total_price": 105, "unit_price": 10500}, seen_at=base_time + timedelta(days=2))
+
+    ListingService.upsert_listing(listing_rows[1], seen_at=base_time)
+    ListingService.upsert_listing({**listing_rows[1], "total_price": 118, "unit_price": 11800}, seen_at=base_time + timedelta(days=1))
+    ListingService.upsert_listing({**listing_rows[1], "total_price": 125, "unit_price": 12500}, seen_at=base_time + timedelta(days=4))
+
+    ListingService.upsert_listing(listing_rows[2], seen_at=base_time + timedelta(days=3))
+    db.session.commit()
+
+
 def test_create_analysis_job_generates_all_result_types(client):
     seed_analysis_data()
 
@@ -78,10 +135,16 @@ def test_create_analysis_job_generates_all_result_types(client):
     assert regression["metrics"]["feature_count"] > 9
     assert "excluded_count" in regression["metrics"]
     assert regression["metrics"]["is_best"] is True
+    assert regression["metrics"]["cv_scheme"]
+    assert regression["metrics"]["cv_folds"] >= 2
+    assert regression["metrics"]["cv_mae_mean"] is not None
+    assert regression["metrics"]["cv_rmse_mean"] is not None
+    assert regression["metrics"]["cv_r2_mean"] is not None
     assert regression["artifacts"]["feature_importance"]
     assert len(regression["artifacts"]["model_comparison"]) >= 3
     assert any(item["model_name"].startswith("SourceSegmented") for item in regression["artifacts"]["model_comparison"])
     assert regression["artifacts"]["model_note"].startswith("该模型用于解释")
+    assert regression["artifacts"]["cv_scheme"] == regression["metrics"]["cv_scheme"]
     assert "分类特征" in "；".join(regression["evidence"]["feature_groups"])
     assert "楼盘目标编码" in "；".join(regression["evidence"]["feature_groups"])
     assert regression["evidence"]["sampling"]["strategy"] == "district_stratified_deterministic"
@@ -241,6 +304,9 @@ def test_tune_job_runs_real_parameter_search(client):
     assert regression["metrics"]["search_candidates"] >= 2
     assert regression["metrics"]["cv_folds"] >= 2
     assert regression["metrics"]["best_params"]
+    assert regression["metrics"]["cv_mae_mean"] is not None
+    assert regression["metrics"]["cv_rmse_std"] is not None
+    assert regression["metrics"]["cv_r2_std"] is not None
     assert "tuning_search" in regression["evidence"]
     assert regression["artifacts"]["tuning"]["search_algorithm"] == "sklearn.model_selection.RandomizedSearchCV"
     candidates = [item for item in data["results"] if item["result_type"] == "regression_candidate"]
@@ -276,6 +342,28 @@ def test_invalid_analysis_job_type_returns_400(client):
     assert response.status_code == 400
     assert payload["code"] == 1
     assert "job_type" in payload["message"]
+
+
+def test_snapshot_insights_returns_delta_statistics(client):
+    seed_snapshot_insights_data()
+
+    response = client.get("/api/analysis/snapshot-insights?days=30")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["code"] == 0
+    data = payload["data"]
+    assert data["window_days"] == 30
+    assert data["kpis"]["tracked_listing_count"] == 2
+    assert data["kpis"]["changed_listing_count"] == 2
+    assert data["kpis"]["price_up_count"] == 2
+    assert data["kpis"]["price_down_count"] == 1
+    assert data["kpis"]["avg_change_rate"] is not None
+    assert len(data["series"]) == 3
+    assert data["series"][0]["date"] == "2026-07-02"
+    assert data["top_districts"][0]["district"] in {"南岸区", "渝北区"}
+    assert data["samples"][0]["direction"] in {"up", "down"}
+    assert "不是未来房价预测" in data["note"]
 
 
 def test_regression_filter_excludes_extreme_training_samples():

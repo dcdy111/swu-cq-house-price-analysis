@@ -9,6 +9,7 @@ import { StatusTag } from "../common/StatusTag";
 import { FeatureImportance } from "../charts/FeatureImportance";
 import { PredVsActualScatter } from "../charts/PredVsActualScatter";
 import { KMeansScatter } from "../charts/KMeansScatter";
+import { SnapshotChangeTrend } from "../charts/SnapshotChangeTrend";
 import { DistrictBoxPlot } from "../charts/DistrictBoxPlot";
 import { toast } from "sonner";
 import {
@@ -31,6 +32,7 @@ import {
   type AnalysisResult,
   type AnalysisSimulationRequest,
   type AnalysisSimulationResult,
+  type SnapshotInsightsResult,
 } from "../../services/api";
 
 type SimulationFormState = {
@@ -108,10 +110,18 @@ function summarizeMetrics(metrics?: Record<string, any>) {
     metrics.mae !== undefined ? `MAE ${formatMetric(metrics.mae, "--")}` : null,
     metrics.rmse !== undefined ? `RMSE ${formatMetric(metrics.rmse, "--")}` : null,
     metrics.r2 !== undefined ? `R² ${formatMetric(metrics.r2, "--")}` : null,
-    metrics.cluster_count !== undefined ? `分层 ${metrics.cluster_count} 类` : null,
+    metrics.cluster_count !== undefined ? `价值层级 ${metrics.cluster_count} 类` : null,
     metrics.anomaly_count !== undefined ? `异常 ${metrics.anomaly_count} 条` : null,
   ].filter(Boolean);
   return parts.join(" · ") || "暂无指标";
+}
+
+function formatCvMetric(meanValue: unknown, stdValue: unknown, digits = 2, suffix = "") {
+  const meanNumber = Number(meanValue);
+  const stdNumber = Number(stdValue);
+  if (!Number.isFinite(meanNumber)) return "暂无";
+  const stdText = Number.isFinite(stdNumber) ? ` ± ${stdNumber.toFixed(digits)}` : "";
+  return `${meanNumber.toFixed(digits)}${stdText}${suffix}`;
 }
 
 function toOptionalNumber(value: string) {
@@ -143,8 +153,10 @@ export function AnalysisPage() {
   const [job, setJob] = useState<AnalysisJob | null>(null);
   const [results, setResults] = useState<AnalysisResult[]>([]);
   const [history, setHistory] = useState<AnalysisJob[]>([]);
+  const [snapshotInsights, setSnapshotInsights] = useState<SnapshotInsightsResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [training, setTraining] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [viewingJob, setViewingJob] = useState<AnalysisJob | null>(null);
@@ -203,8 +215,20 @@ export function AnalysisPage() {
     }
   };
 
+  const loadSnapshotInsights = async () => {
+    setSnapshotLoading(true);
+    try {
+      const latest = await api.getSnapshotInsights(90);
+      setSnapshotInsights(latest);
+    } catch {
+      setSnapshotInsights(null);
+    } finally {
+      setSnapshotLoading(false);
+    }
+  };
+
   const refreshAnalysisState = async () => {
-    await Promise.all([loadLatest(), loadHistory()]);
+    await Promise.all([loadLatest(), loadHistory(), loadSnapshotInsights()]);
   };
 
   useEffect(() => {
@@ -215,6 +239,9 @@ export function AnalysisPage() {
   const edaResult = useMemo(() => getResult(results, "eda"), [results]);
   const clusterResult = useMemo(() => getResult(results, "cluster"), [results]);
   const anomalyResult = useMemo(() => getResult(results, "anomaly"), [results]);
+  const snapshotSeries = useMemo(() => snapshotInsights?.series ?? [], [snapshotInsights]);
+  const snapshotTopDistricts = useMemo(() => snapshotInsights?.top_districts ?? [], [snapshotInsights]);
+  const snapshotSamples = useMemo(() => snapshotInsights?.samples ?? [], [snapshotInsights]);
 
   const metricsList = useMemo(
     () => [
@@ -244,6 +271,27 @@ export function AnalysisPage() {
             : "--",
         unit: "",
         desc: "平均绝对百分误差",
+      },
+    ],
+    [regressionResult],
+  );
+
+  const cvMetricsList = useMemo(
+    () => [
+      {
+        label: "CV MAE",
+        value: formatCvMetric(regressionResult?.metrics?.cv_mae_mean, regressionResult?.metrics?.cv_mae_std, 2, " 元/㎡"),
+        desc: "交叉验证平均绝对误差 ± 波动",
+      },
+      {
+        label: "CV RMSE",
+        value: formatCvMetric(regressionResult?.metrics?.cv_rmse_mean, regressionResult?.metrics?.cv_rmse_std, 2, " 元/㎡"),
+        desc: "交叉验证均方根误差 ± 波动",
+      },
+      {
+        label: "CV R²",
+        value: formatCvMetric(regressionResult?.metrics?.cv_r2_mean, regressionResult?.metrics?.cv_r2_std, 4),
+        desc: "交叉验证决定系数 ± 波动",
       },
     ],
     [regressionResult],
@@ -338,8 +386,13 @@ export function AnalysisPage() {
       },
       {
         key: "cluster",
-        title: "聚类分析",
-        text: "按挂牌价、总价、面积等特征做房源分层，并允许用户输入样本在线归类。",
+        title: "价值分层",
+        text: "按挂牌价、总价、面积等特征做房源价值分层，并允许用户输入样本在线归类。",
+      },
+      {
+        key: "snapshot",
+        title: "快照分析",
+        text: "基于同一房源的连续快照差分观察调价行为，只做行为统计，不包装成未来走势预测。",
       },
       {
         key: "anomaly",
@@ -543,6 +596,7 @@ export function AnalysisPage() {
           ? "默认参数"
           : "--",
     ],
+    ["验证方式", regressionResult?.metrics?.cv_scheme ?? "--"],
     ["训练集", `${job?.train_count ?? "--"} 条`],
     ["测试集", `${job?.test_count ?? "--"} 条`],
     ["剔除样本", `${regressionResult?.metrics?.excluded_count ?? 0} 条`],
@@ -621,7 +675,7 @@ export function AnalysisPage() {
 
       <SectionCard title="分析模块说明" subtitle="展示真实建模结果与可解释证据" className="overflow-hidden">
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.35fr_.65fr]">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
             {moduleGuides.map(item => (
               <div
                 key={item.key}
@@ -642,14 +696,14 @@ export function AnalysisPage() {
           >
             <div style={{ fontSize: 13, fontWeight: 700, color: "#163A70" }}>使用口径提醒</div>
             <div style={{ fontSize: 12, color: "#31507A", lineHeight: 1.85, marginTop: 8 }}>
-              仅展示通过质量过滤的挂牌价数据。在线试算输出的是挂牌价/报价辅助参考，不代表成交价预测。模型用于解释影响因素、做辅助估值和分层展示，不宣称精准预测成交价。
+              仅展示通过质量过滤的挂牌价数据。在线试算输出的是挂牌价/报价辅助参考，不代表成交价预测。模型用于解释影响因素、做辅助估值、房源价值分层和调价行为统计，不宣称精准预测成交价。
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               {[
                 `结果类型 ${results.length || 0} 项`,
                 `回归指标 ${regressionResult ? "已就绪" : "待生成"}`,
                 `在线试算 ${simulationResult ? "已生成" : "待输入"}`,
-                `历史任务 ${history.length || 0} 条`,
+                `快照分析 ${snapshotInsights ? "已就绪" : "待读取"}`,
               ].map(text => (
                 <div
                   key={text}
@@ -727,7 +781,10 @@ export function AnalysisPage() {
                 预测分析
               </TabsTrigger>
               <TabsTrigger value="cluster" style={{ fontSize: 13 }}>
-                聚类分析
+                价值分层
+              </TabsTrigger>
+              <TabsTrigger value="snapshot" style={{ fontSize: 13 }}>
+                快照分析
               </TabsTrigger>
               <TabsTrigger value="anomaly" style={{ fontSize: 13 }}>
                 异常检测
@@ -902,7 +959,7 @@ export function AnalysisPage() {
                       className="rounded-2xl px-4 py-3"
                       style={{ background: "#F8FAFC", border: "1px solid #E5EAF2", fontSize: 12, color: "#4B5563", lineHeight: 1.8 }}
                     >
-                      如果没有填写参考挂牌单价，系统会先估计挂牌单价，再据此完成聚类归类和相似样本检索。
+                      如果没有填写参考挂牌单价，系统会先估计挂牌单价，再据此完成价值分层归类和相似样本检索。
                     </div>
 
                     <div className="flex justify-end">
@@ -915,6 +972,30 @@ export function AnalysisPage() {
                 </SectionCard>
                 <SectionCard title="影响挂牌单价的主要特征" subtitle="只解释挂牌单价影响因素，不代表成交价预测">
                   <FeatureImportance data={featureImportance} />
+                </SectionCard>
+                <SectionCard
+                  title="交叉验证稳定性"
+                  subtitle={regressionResult?.metrics?.cv_scheme ?? "当前结果暂未生成交叉验证摘要"}
+                >
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    {cvMetricsList.map(item => (
+                      <div
+                        key={item.label}
+                        className="rounded-2xl p-4"
+                        style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}
+                      >
+                        <div style={{ fontSize: 11, color: "#9CA3AF" }}>{item.label}</div>
+                        <div style={{ fontSize: 16, color: "#163A70", fontWeight: 700, marginTop: 6 }}>{item.value}</div>
+                        <div style={{ fontSize: 11, color: "#6B7280", lineHeight: 1.6, marginTop: 6 }}>{item.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div
+                    className="mt-3 rounded-2xl px-4 py-3"
+                    style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", fontSize: 12, color: "#31507A", lineHeight: 1.8 }}
+                  >
+                    交叉验证用于说明模型在不同样本切分下的稳定性。页面保留 MAE / RMSE / R² 作为横截面挂牌价辅助估计指标，但不把这些结果表述为成交价精准预测。
+                  </div>
                 </SectionCard>
               </div>
 
@@ -1052,7 +1133,7 @@ export function AnalysisPage() {
 
           <TabsContent value="cluster">
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.05fr_.95fr]">
-              <SectionCard title="KMeans 价值分层" subtitle={clusterResult?.summary ?? "暂无真实聚类结果"} className="h-full">
+              <SectionCard title="KMeans 价值分层" subtitle={clusterResult?.summary ?? "暂无真实价值分层结果"} className="h-full">
                 <KMeansScatter data={clusterPoints} />
               </SectionCard>
               <div className="flex flex-col gap-4">
@@ -1062,7 +1143,7 @@ export function AnalysisPage() {
                       className="rounded-2xl px-4 py-5"
                       style={{ background: "#F8FAFC", border: "1px solid #E5EAF2", color: "#9CA3AF", fontSize: 13, lineHeight: 1.7 }}
                     >
-                      先在“预测分析”页签输入样本并完成试算，这里就会展示该样本的聚类归属和分层画像。
+                      先在“预测分析”页签输入样本并完成试算，这里就会展示该样本的价值层级归属和分层画像。
                     </div>
                   ) : (
                     <div className="flex flex-col gap-3">
@@ -1080,7 +1161,7 @@ export function AnalysisPage() {
                       </div>
                       <div className="grid grid-cols-2 gap-3 rounded-2xl p-3" style={{ background: "#F8FAFC", border: "1px solid #E5EAF2" }}>
                         <div>
-                          <div style={{ fontSize: 11, color: "#9CA3AF" }}>聚类数</div>
+                          <div style={{ fontSize: 11, color: "#9CA3AF" }}>层级数</div>
                           <div style={{ fontSize: 13, color: "#163A70", fontWeight: 700, marginTop: 4 }}>
                             {simulationResult.cluster.cluster_count}
                           </div>
@@ -1119,10 +1200,10 @@ export function AnalysisPage() {
                   )}
                 </SectionCard>
 
-                <SectionCard title="聚类画像" subtitle={`轮廓系数 ${clusterResult?.metrics?.silhouette_score ?? "--"}`}>
+                <SectionCard title="房源分层画像" subtitle={`轮廓系数 ${clusterResult?.metrics?.silhouette_score ?? "--"}`}>
                   <div className="flex flex-col gap-3">
                     {clusterProfiles.length === 0 && (
-                      <div style={{ color: "#9CA3AF", fontSize: 13 }}>暂无真实聚类画像。</div>
+                      <div style={{ color: "#9CA3AF", fontSize: 13 }}>暂无真实分层画像。</div>
                     )}
                     {clusterProfiles.map(profile => (
                       <div
@@ -1140,6 +1221,179 @@ export function AnalysisPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                </SectionCard>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="snapshot">
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.05fr_.95fr]">
+                <SectionCard
+                  title={`最近 ${snapshotInsights?.window_days ?? 90} 天调价趋势`}
+                  subtitle={snapshotLoading ? "正在读取连续快照结果" : snapshotInsights?.note ?? "暂无真实快照分析结果"}
+                >
+                  <SnapshotChangeTrend data={snapshotSeries} />
+                </SectionCard>
+
+                <SectionCard title="快照行为摘要" subtitle="只基于同一房源的连续快照差分，不展示未来价格预测">
+                  <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+                    {[
+                      {
+                        label: "持续跟踪房源",
+                        value: Number(snapshotInsights?.kpis?.tracked_listing_count ?? 0).toLocaleString(),
+                        tone: "#163A70",
+                        bg: "#EFF6FF",
+                        border: "#BFDBFE",
+                      },
+                      {
+                        label: "发生调价房源",
+                        value: Number(snapshotInsights?.kpis?.changed_listing_count ?? 0).toLocaleString(),
+                        tone: "#0F766E",
+                        bg: "#ECFEFF",
+                        border: "#A5F3FC",
+                      },
+                      {
+                        label: "上调事件",
+                        value: Number(snapshotInsights?.kpis?.price_up_count ?? 0).toLocaleString(),
+                        tone: "#166534",
+                        bg: "#F0FDF4",
+                        border: "#BBF7D0",
+                      },
+                      {
+                        label: "下调事件",
+                        value: Number(snapshotInsights?.kpis?.price_down_count ?? 0).toLocaleString(),
+                        tone: "#C2410C",
+                        bg: "#FFF7ED",
+                        border: "#FDBA74",
+                      },
+                      {
+                        label: "平均调价幅度",
+                        value: formatNullableNumber(snapshotInsights?.kpis?.avg_change_rate, 2, "%"),
+                        tone: "#7C3AED",
+                        bg: "#F5F3FF",
+                        border: "#DDD6FE",
+                      },
+                      {
+                        label: "中位调价幅度",
+                        value: formatNullableNumber(snapshotInsights?.kpis?.median_change_rate, 2, "%"),
+                        tone: "#1D4ED8",
+                        bg: "#EFF6FF",
+                        border: "#BFDBFE",
+                      },
+                    ].map(item => (
+                      <div
+                        key={item.label}
+                        className="rounded-2xl p-4"
+                        style={{ background: item.bg, border: `1px solid ${item.border}` }}
+                      >
+                        <div style={{ fontSize: 11, color: "#6B7280" }}>{item.label}</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: item.tone, marginTop: 8 }}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div
+                    className="mt-4 rounded-2xl px-4 py-3"
+                    style={{ background: "#F8FAFC", border: "1px solid #E5EAF2", fontSize: 12, color: "#4B5563", lineHeight: 1.8 }}
+                  >
+                    <div>观察窗口：{snapshotInsights ? `${formatDate(snapshotInsights.observed_from)} 至 ${formatDate(snapshotInsights.observed_to)}` : "暂无"}</div>
+                    <div className="mt-1">
+                      说明：{snapshotInsights?.note ?? "当前真实多期样本有限，先展示调价行为统计，不展示未来预测结论。"}
+                    </div>
+                  </div>
+                </SectionCard>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[.95fr_1.05fr]">
+                <SectionCard title="区县调价活跃度" subtitle="按调价事件数、平均绝对调价幅度和平均调价间隔观察最活跃区县">
+                  <div className="flex flex-col gap-3">
+                    {snapshotTopDistricts.length === 0 && (
+                      <div
+                        className="rounded-2xl px-4 py-5"
+                        style={{ background: "#F8FAFC", border: "1px solid #E5EAF2", color: "#9CA3AF", fontSize: 13, lineHeight: 1.7 }}
+                      >
+                        当前真实多期调价样本仍较少，暂未形成稳定的区县排行。
+                      </div>
+                    )}
+                    {snapshotTopDistricts.map((item, index) => (
+                      <div
+                        key={`${item.district}-${index}`}
+                        className="rounded-2xl p-3"
+                        style={{ background: "#FFFFFF", border: "1px solid #E5EAF2" }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div style={{ color: "#163A70", fontSize: 13, fontWeight: 700 }}>{item.district || "待复核"}</div>
+                          <Badge variant="outline" style={{ fontSize: 10 }}>
+                            调价事件 {Number(item.event_count || 0).toLocaleString()}
+                          </Badge>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2" style={{ fontSize: 12, color: "#4B5563" }}>
+                          <div>涉及房源：{Number(item.changed_listing_count || 0).toLocaleString()} 套</div>
+                          <div>平均绝对调价：{formatNullableNumber(item.avg_abs_change_rate, 2, "%")}</div>
+                          <div>上调次数：{Number(item.price_up_count || 0).toLocaleString()}</div>
+                          <div>平均调价间隔：{formatNullableNumber(item.avg_change_interval_days, 1, " 天")}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="最近真实调价样本" subtitle="展示同一房源连续快照发生变化的真实记录">
+                  <div className="overflow-x-auto rounded-2xl border border-[#E5EAF2]">
+                    <Table>
+                      <TableHeader>
+                        <TableRow style={{ background: "#F7F9FC" }}>
+                          <TableHead style={{ fontSize: 12 }}>房源</TableHead>
+                          <TableHead style={{ fontSize: 12 }}>区县</TableHead>
+                          <TableHead style={{ fontSize: 12 }}>前值</TableHead>
+                          <TableHead style={{ fontSize: 12 }}>现值</TableHead>
+                          <TableHead style={{ fontSize: 12 }}>方向</TableHead>
+                          <TableHead style={{ fontSize: 12 }}>变动率</TableHead>
+                          <TableHead style={{ fontSize: 12 }}>间隔</TableHead>
+                          <TableHead style={{ fontSize: 12 }}>时间</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {snapshotSamples.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={8} style={{ textAlign: "center", color: "#9CA3AF", fontSize: 13, padding: 24 }}>
+                              暂无可展示的连续调价样本。
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {snapshotSamples.map(sample => {
+                          const isUnitPrice = sample.metric === "unit_price";
+                          const previousValue = isUnitPrice ? sample.previous_unit_price : sample.previous_total_price;
+                          const currentValue = isUnitPrice ? sample.current_unit_price : sample.current_total_price;
+                          const unitSuffix = isUnitPrice ? " 元/㎡" : " 万元";
+                          const changeRate = Number(sample.change_rate ?? 0);
+                          const directionTone = sample.direction === "up" ? "#166534" : sample.direction === "down" ? "#C2410C" : "#6B7280";
+                          return (
+                            <TableRow key={`${sample.listing_id}-${sample.snapshot_at}-${sample.metric}`} style={{ fontSize: 13 }}>
+                              <TableCell style={{ fontWeight: 500, minWidth: 180 }}>
+                                <div>{sample.title}</div>
+                                <div style={{ color: "#9CA3AF", fontSize: 11, marginTop: 4 }}>
+                                  {sample.community || "未标注小区"} · {isUnitPrice ? "挂牌单价" : "挂牌总价"}
+                                </div>
+                              </TableCell>
+                              <TableCell>{sample.district || "待复核"}</TableCell>
+                              <TableCell>{formatNullableNumber(previousValue, 2, unitSuffix)}</TableCell>
+                              <TableCell>{formatNullableNumber(currentValue, 2, unitSuffix)}</TableCell>
+                              <TableCell style={{ color: directionTone, fontWeight: 700 }}>
+                                {sample.direction === "up" ? "上调" : sample.direction === "down" ? "下调" : "持平"}
+                              </TableCell>
+                              <TableCell style={{ color: directionTone, fontWeight: 700 }}>
+                                {Number.isFinite(changeRate) ? `${changeRate > 0 ? "+" : ""}${changeRate.toFixed(2)}%` : "暂无"}
+                              </TableCell>
+                              <TableCell>{formatNullableNumber(sample.change_interval_days, 1, " 天")}</TableCell>
+                              <TableCell>{formatDate(sample.snapshot_at)}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
                   </div>
                 </SectionCard>
               </div>
